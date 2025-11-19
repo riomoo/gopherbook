@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://anansi-project.github.io/docs/comicinfo/schemas/v2.1">
+	<AgeRating>Adults Only 18+</AgeRating>
+	<BlackAndWhite>No</BlackAndWhite>
+	<Format>CBZ</Format>
+	<Inker>Artist Name</Inker>
+	<Writer>Artist Name</Writer>
+	<Penciller>Artist Name</Penciller>
+	<CoverArtist>Artist Name</CoverArtist>
+	<Publisher>Publisher Name</Publisher>
+	<LanguageISO>en</LanguageISO>
+	<Manga>No</Manga>
+	<Notes>CBZ created by nobodyatall@cock.li</Notes>
+	<Tags>Blood, Gore, Comedy, Dark Comedy, Mature, Leading Ladies, Fantasy</Tags>
+	<ScanInformation>person who scanned comic</ScanInformation>
+	<PageCount>5</PageCount>
+	<Pages>
+		<Page Image="0" ImageSize="1702703" Type="FrontCover"/>
+		<Page Image="1" ImageSize="332602"/>
+		<Page Image="2" ImageSize="3535719"/>
+		<Page Image="3" ImageSize="3424043"/>
+		<Page Image="4" ImageSize="3063517"/>
+	</Pages>
+	<Series>Main Title</Series>
+	<StoryArc>Sub Title</StoryArc>
+	<StoryArcNumber>1</StoryArcNumber>
+	<Summary>Summary of book</Summary>
+	<Title>Main Title: Sub Title</Title>
+	<Year>2017</Year>
+	<Month>9</Month>
+	<Day>11</Day>
+	<Number>1</Number>
+	<Count>1</Count>
+	<Volume>1</Volume>
+</ComicInfo>
