@@ -1,0 +1,11 @@
+.containerignore
+.git
+.gitignore
+.gitattributes
+bash-scripts
+Containerfile
+README.md
+xml-template
+cache
+etc
+library
