@@ -1,0 +1,8 @@
+*.cbz
+*.cb7
+*.cbr
+*.pdf
+*.json
+cache
+library
+etc
