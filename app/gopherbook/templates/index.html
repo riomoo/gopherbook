@@ -449,12 +449,30 @@
             position: relative;
         }
 
+        .image-container {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            position: relative;
+            cursor: grab;
+        }
+
+        .image-container.panning {
+            cursor: grabbing;
+        }
+
         #comicImage {
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
             transform-origin: center center;
-            transition: transform 0.2s;
+            transition: transform 0.1s;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            user-select: none;
+            -webkit-user-drag: none;
         }
 
         .zoom-controls {
@@ -812,7 +830,9 @@
                 <div class="bookmark-list-title">Bookmarked Pages</div>
                 <div id="bookmarkListItems"></div>
             </div>
-            <img id="comicImage" alt="Comic page">
+            <div class="image-container" id="imageContainer">
+                <img id="comicImage" alt="Comic page">
+            </div>
             <div class="zoom-controls">
                 <button class="zoom-btn" onclick="zoomOut()">−</button>
                 <button class="zoom-btn" onclick="resetZoom()">⊙</button>
@@ -879,6 +899,15 @@
     let fitMode = 'width';
     let selectedTags = new Set();
     let managingComic = null;
+
+    // Pan variables
+    let isPanning = false;
+    let panStartX = 0;
+    let panStartY = 0;
+    let panOffsetX = 0;
+    let panOffsetY = 0;
+    let currentPanX = 0;
+    let currentPanY = 0;
 
     function showTab(tab) {
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -1347,6 +1376,85 @@
         }
     }
 
+    // Initialize pan functionality
+    function initializePan() {
+        const container = document.getElementById('imageContainer');
+        const img = document.getElementById('comicImage');
+
+        container.addEventListener('mousedown', startPan);
+        container.addEventListener('mousemove', doPan);
+        container.addEventListener('mouseup', endPan);
+        container.addEventListener('mouseleave', endPan);
+
+        // Touch support for mobile
+        container.addEventListener('touchstart', handleTouchStart, {passive: false});
+        container.addEventListener('touchmove', handleTouchMove, {passive: false});
+        container.addEventListener('touchend', endPan);
+    }
+
+    function startPan(e) {
+        if (zoomLevel <= 1) return; // Only pan when zoomed in
+
+        isPanning = true;
+        const container = document.getElementById('imageContainer');
+        container.classList.add('panning');
+
+        panStartX = e.clientX - currentPanX;
+        panStartY = e.clientY - currentPanY;
+
+        e.preventDefault();
+    }
+
+    function doPan(e) {
+        if (!isPanning) return;
+
+        e.preventDefault();
+
+        currentPanX = e.clientX - panStartX;
+        currentPanY = e.clientY - panStartY;
+
+        updateImageTransform();
+    }
+
+    function endPan(e) {
+        if (isPanning) {
+            isPanning = false;
+            const container = document.getElementById('imageContainer');
+            container.classList.remove('panning');
+        }
+    }
+
+    function handleTouchStart(e) {
+        if (zoomLevel <= 1 || e.touches.length !== 1) return;
+
+        isPanning = true;
+        const container = document.getElementById('imageContainer');
+        container.classList.add('panning');
+
+        const touch = e.touches[0];
+        panStartX = touch.clientX - currentPanX;
+        panStartY = touch.clientY - currentPanY;
+
+        e.preventDefault();
+    }
+
+    function handleTouchMove(e) {
+        if (!isPanning || e.touches.length !== 1) return;
+
+        e.preventDefault();
+
+        const touch = e.touches[0];
+        currentPanX = touch.clientX - panStartX;
+        currentPanY = touch.clientY - panStartY;
+
+        updateImageTransform();
+    }
+
+    function updateImageTransform() {
+        const img = document.getElementById('comicImage');
+        img.style.transform = `translate(calc(-50% + ${currentPanX}px), calc(-50% + ${currentPanY}px)) scale(${zoomLevel})`;
+    }
+
     async function openReader(comic) {
         currentComic = comic;
         currentPage = 0;
@@ -1439,6 +1547,7 @@
         document.getElementById('readerModal').classList.remove('active');
         document.getElementById('bookmarkList').style.display = 'none';
         currentComic = null;
+        resetZoom();
     }
 
     async function loadPage(pageNum) {
@@ -1609,12 +1718,21 @@
 
     function resetZoom() {
         zoomLevel = 1;
+        currentPanX = 0;
+        currentPanY = 0;
         applyZoom();
     }
 
     function applyZoom() {
-        const img = document.getElementById('comicImage');
-        img.style.transform = 'scale(' + zoomLevel + ')';
+        updateImageTransform();
+
+        // Show/hide grab cursor based on zoom level
+        const container = document.getElementById('imageContainer');
+        if (zoomLevel > 1) {
+            container.style.cursor = 'grab';
+        } else {
+            container.style.cursor = 'default';
+        }
     }
 
     function toggleFitMode() {
@@ -1796,6 +1914,11 @@
             showMessage('Error: ' + err.message, 'error');
         }
     }
+
+    // Initialize pan when page loads
+    window.addEventListener('load', function() {
+        initializePan();
+    });
 
     fetch('/api/user')
     .then(function(res) {
