@@ -1,0 +1,1963 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gopherbook</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1b1e2c;
+            color: #bfbcb7;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: #395E62;
+            border-bottom: 1px solid #314C52;
+            padding: 20px 0;
+            margin-bottom: 30px;
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            color: #1b1e2c;
+            font-size: 24px;
+        }
+
+        .auth-section {
+            background: #1b1e2c;
+            border: 1px solid #446B6E;
+            border-radius: 6px;
+            padding: 30px;
+            max-width: 400px;
+            margin: 100px auto;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #bfbcb7;
+            font-weight: 500;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="file"],
+        select {
+            width: 100%;
+            padding: 10px 12px;
+            background: #1b1e2c;
+            border: 1px solid #446B6E;
+            border-radius: 6px;
+            color: #bfbcb7;
+            font-size: 14px;
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #446B6E;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px 16px;
+            background: #395E62;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #446B6E;
+        }
+
+        .secondary-btn {
+            background: #314C52;
+            margin-top: 10px;
+        }
+
+        .secondary-btn:hover {
+            background: #446B6E;
+        }
+
+        .upload-section {
+            background: #1b1e2c;
+            border: 1px solid #446B6E;
+            border-radius: 6px;
+            padding: 24px;
+            margin-bottom: 30px;
+        }
+
+	.filter-section {
+            background: #1b1e2c;
+            border: 1px solid #446B6E;
+            border-radius: 6px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .filter-controls {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .tag-filter {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: #1b1e2c;
+            border: 1px solid #bfbcb7;
+            border-radius: 16px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tag-filter:hover {
+            border-color: #395E62;
+        }
+
+        .tag-filter.active {
+            background: #446B6E;
+            border-color: #446B6E;
+        }
+
+        .comics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .comic-card {
+            background: #1b1e2c;
+            border: 1px solid #395E62;
+            border-radius: 6px;
+            overflow: hidden;
+            transition: transform 0.2s, border-color 0.2s;
+            cursor: pointer;
+        }
+
+        .comic-card:hover {
+            transform: translateY(-2px);
+            border-color: #395E62;
+        }
+
+        .comic-cover-container {
+            width: 100%;
+            height: 280px;
+            background: #1b1e2c;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .comic-cover {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #1b1e2c;
+        }
+
+        .comic-cover-fallback {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #858380;
+            font-size: 14px;
+            background: #1b1e2c;
+            border-bottom: 1px solid #A34346;
+        }
+
+        .comic-info {
+            padding: 16px;
+        }
+
+        .comic-title {
+            font-weight: 600;
+            color: #446B6E;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .comic-meta {
+            font-size: 12px;
+            color: #8b949e;
+            line-height: 1.6;
+            margin-bottom: 8px;
+        }
+
+        .comic-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 8px;
+        }
+
+        .comic-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            color: white;
+        }
+
+        .comic-artist {
+            display: inline-block;
+            background: #1f6feb;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+        }
+
+        .unorganized {
+            background: #8b949e;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #30363d;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            color: #8b949e;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            width: auto;
+        }
+
+        .tab.active {
+            color: #395E62;
+            border-bottom-color: #395E62;
+        }
+
+        .message {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .success {
+            background: #446B6E;
+            color: white;
+        }
+
+        .error {
+            background: #A55354;
+            color: white;
+        }
+
+        #readerModal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            z-index: 1000;
+        }
+
+        #readerModal.active {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .reader-header {
+            background: #1b1e2c;
+            border-bottom: 1px solid #395E62;
+            padding: 12px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .reader-title {
+            color: #395E62;
+            font-weight: 600;
+        }
+
+        .reader-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .bookmark-indicator {
+            color: #f0883e;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .bookmark-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #f0883e;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+            z-index: 10;
+        }
+
+        .bookmark-list {
+            position: absolute;
+            bottom: 70px;
+            left: 20px;
+            background: rgba(22, 27, 34, 0.95);
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            min-width: 200px;
+            z-index: 100;
+        }
+
+        .bookmark-list-title {
+            color: #f0883e;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .bookmark-list-item {
+            padding: 6px 8px;
+            background: #21262d;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            margin-bottom: 4px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }
+
+        .bookmark-list-item:hover {
+            background: #30363d;
+        }
+
+        .bookmark-list-item.current {
+            border-color: #f0883e;
+            background: rgba(240, 136, 62, 0.1);
+        }
+
+        .bookmark-delete {
+            color: #da3633;
+            cursor: pointer;
+            padding: 0 4px;
+            font-size: 16px;
+        }
+
+        .bookmark-delete:hover {
+            color: #ff5555;
+        }
+
+        .reader-btn {
+            background: #21262d;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+            width: auto;
+        }
+
+        .reader-btn:hover {
+            background: #30363d;
+        }
+
+        .reader-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .page-input {
+            width: 80px;
+            text-align: center;
+            padding: 6px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            border-radius: 6px;
+        }
+
+        .reader-content {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .image-container {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            position: relative;
+            cursor: grab;
+        }
+
+        .image-container.panning {
+            cursor: grabbing;
+        }
+
+        #comicImage {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            transform-origin: center center;
+            transition: transform 0.1s;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+
+        .zoom-controls {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            gap: 8px;
+            background: rgba(22, 27, 34, 0.95);
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+        }
+
+        .zoom-btn {
+            width: 40px;
+            height: 40px;
+            background: #21262d;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .zoom-btn:hover {
+            background: #30363d;
+        }
+
+        #tagModal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #tagModal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 24px;
+            max-width: 500px;
+            width: 90%;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-title {
+            color: #58a6ff;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            color: #8b949e;
+            font-size: 24px;
+            cursor: pointer;
+            width: auto;
+            padding: 0;
+        }
+
+        .tag-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .tag-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 13px;
+            color: white;
+            cursor: pointer;
+        }
+
+        .tag-item .remove {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .add-tag-form {
+            display: flex;
+            gap: 8px;
+        }
+
+        .add-tag-input {
+            flex: 1;
+        }
+
+        .color-picker {
+            width: 60px;
+            height: 38px;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .available-tags {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #30363d;
+        }
+
+        .available-tags-title {
+            font-size: 14px;
+            color: #8b949e;
+            margin-bottom: 12px;
+        }
+
+        .context-menu {
+            position: absolute;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 8px 0;
+            min-width: 150px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+            z-index: 3000;
+        }
+
+        .context-menu-item {
+            padding: 8px 16px;
+            cursor: pointer;
+            color: #c9d1d9;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .context-menu-item:hover {
+            background: #21262d;
+        }
+
+        #passwordModal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 2500;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #passwordModal.active {
+            display: flex;
+        }
+
+        .password-modal-content {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 30px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+        }
+
+        .password-modal-header {
+            margin-bottom: 20px;
+        }
+
+        .password-modal-title {
+            color: #58a6ff;
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .password-modal-subtitle {
+            color: #8b949e;
+            font-size: 14px;
+        }
+
+        .password-input-group {
+            margin-bottom: 20px;
+        }
+
+        .password-input-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #c9d1d9;
+            font-weight: 500;
+        }
+
+        .password-input-group input {
+            width: 100%;
+            padding: 10px 12px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #c9d1d9;
+            font-size: 14px;
+        }
+
+        .password-input-group input:focus {
+            outline: none;
+            border-color: #58a6ff;
+        }
+
+        .password-modal-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .password-modal-buttons button {
+            flex: 1;
+        }
+
+        .password-error {
+            background: #da3633;
+            color: white;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1>Gopherbook</h1>
+            <div id="userInfo" class="hidden">
+                <button onclick="logout()" class="secondary-btn" style="width: auto; padding: 8px 16px;">Logout</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <div id="authSection" class="auth-section">
+            <div id="authMessage" class="message hidden"></div>
+            <div class="tabs">
+                <button class="tab active" onclick="showTab('login')">Login</button>
+                <button class="tab" onclick="showTab('register')">Register</button>
+            </div>
+
+            <div id="loginForm">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="loginUsername" placeholder="Enter username">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="loginPassword" placeholder="Enter password">
+                </div>
+                <button onclick="login()">Login</button>
+            </div>
+
+            <div id="registerForm" class="hidden">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="regUsername" placeholder="Choose username">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="regPassword" placeholder="Choose password">
+                </div>
+                <button onclick="register()">Register</button>
+            </div>
+        </div>
+
+        <div id="mainSection" class="hidden">
+            <div id="message"></div>
+
+            <div class="upload-section">
+                <h2 style="margin-bottom: 16px; color: #c9d1d9;">Upload Comic</h2>
+                <div class="form-group">
+                    <label>Select File (CBZ)</label>
+                    <input type="file" id="fileUpload" accept=".cbz">
+                </div>
+                <button onclick="uploadComic()">Upload</button>
+            </div>
+
+            <div class="filter-section">
+                <h3 style="margin-bottom: 12px; color: #c9d1d9; font-size: 16px;">Filter by Tags</h3>
+                <div class="filter-controls">
+                    <div style="position: relative; width: 300px;">
+                        <input type="text" id="tagSearch" placeholder="Search tags..." style="width: 100%; padding-right: 30px;">
+                        <span style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: #8b949e;">🔍</span>
+                    </div>
+                    <div id="tagSuggestions" class="context-menu hidden" style="width: 300px; max-height: 200px; overflow-y: auto;"></div>
+                    <div id="selectedTagFilters" class="filter-controls" style="flex-wrap: wrap; gap: 8px; margin-top: 10px;"></div>
+                </div>
+            </div>
+
+            <div id="adminPanel" class="upload-section hidden">
+                <h2>Admin Panel</h2>
+                <div class="form-group">
+                    <label>Registration: <span id="regStatus">Enabled</span></label>
+                    <button onclick="toggleRegistration()" class="secondary-btn">Toggle</button>
+                </div>
+                <div class="form-group">
+                    <label>Delete Comic ID:</label>
+                    <input type="text" id="deleteId" placeholder="Enter comic ID">
+                    <button onclick="deleteComic()" class="secondary-btn">Delete</button>
+                </div>
+            </div>
+            <h2 style="margin-bottom: 20px; color: #c9d1d9;">Library</h2>
+            <div id="comicsGrid" class="comics-grid"></div>
+        </div>
+    </div>
+
+    <div id="readerModal">
+        <div class="reader-header">
+            <div class="reader-title" id="readerTitle">Loading...</div>
+            <div class="reader-controls">
+                <button class="reader-btn" onclick="prevPage()" id="prevBtn">← Previous</button>
+                <input type="number" class="page-input" id="pageInput" min="1" onchange="goToPage()">
+                <span style="color: #8b949e;"> / <span id="totalPages">0</span></span>
+                <button class="reader-btn" onclick="nextPage()" id="nextBtn">Next →</button>
+                <button class="reader-btn" onclick="toggleFitMode()">Fit: <span id="fitMode">Width</span></button>
+                <div class="bookmark-indicator" id="bookmarkIndicator" style="display: none;">
+                    <span>📖</span>
+                    <span id="bookmarkText">Bookmarked</span>
+                </div>
+                <button class="reader-btn" onclick="toggleBookmark()" id="bookmarkBtn">📖 Bookmark Page</button>
+                <button class="reader-btn" onclick="toggleBookmarkList()" id="bookmarkListBtn">📚 Bookmarks (<span id="bookmarkCount">0</span>)</button>
+                <button class="reader-btn" onclick="closeReader()">Close</button>
+            </div>
+        </div>
+        <div class="reader-content" id="readerContent">
+            <div id="bookmarkList" class="bookmark-list" style="display: none;">
+                <div class="bookmark-list-title">Bookmarked Pages</div>
+                <div id="bookmarkListItems"></div>
+            </div>
+            <div class="image-container" id="imageContainer">
+                <img id="comicImage" alt="Comic page">
+            </div>
+            <div class="zoom-controls">
+                <button class="zoom-btn" onclick="zoomOut()">−</button>
+                <button class="zoom-btn" onclick="resetZoom()">⊙</button>
+                <button class="zoom-btn" onclick="zoomIn()">+</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="tagModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Manage Tags</h3>
+                <button class="close-btn" onclick="closeTagModal()">×</button>
+            </div>
+
+            <div class="tag-list" id="currentTags"></div>
+
+            <div class="available-tags">
+                <div class="available-tags-title">Available Tags (click to add):</div>
+                <div class="tag-list" id="availableTags"></div>
+            </div>
+
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #30363d;">
+                <h4 style="font-size: 14px; color: #8b949e; margin-bottom: 12px;">Create New Tag</h4>
+                <div class="add-tag-form">
+                    <input type="text" id="newTagName" class="add-tag-input" placeholder="Tag name">
+                    <input type="color" id="newTagColor" class="color-picker" value="#1f6feb">
+                    <button onclick="createTag()" style="width: auto; padding: 8px 16px;">Add</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="passwordModal">
+        <div class="password-modal-content">
+            <div class="password-modal-header">
+                <div class="password-modal-title">🔒 Password Required</div>
+                <div class="password-modal-subtitle" id="passwordComicTitle">This comic is encrypted</div>
+            </div>
+
+            <div id="passwordError" class="password-error hidden"></div>
+
+            <div class="password-input-group">
+                <label>Enter Password</label>
+                <input type="password" id="passwordInput" placeholder="Enter password">
+            </div>
+
+            <div class="password-modal-buttons">
+                <button onclick="cancelPassword()" class="secondary-btn">Cancel</button>
+                <button onclick="submitPassword()">Unlock</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="contextMenu" class="context-menu hidden"></div>
+
+    <script>
+    let comics = [];
+    let allTags = [];
+    let currentComic = null;
+    let currentPage = 0;
+    let totalPages = 0;
+    let zoomLevel = 1;
+    let fitMode = 'width';
+    let selectedTags = new Set();
+    let managingComic = null;
+
+    // Pan variables
+    let isPanning = false;
+    let panStartX = 0;
+    let panStartY = 0;
+    let panOffsetX = 0;
+    let panOffsetY = 0;
+    let currentPanX = 0;
+    let currentPanY = 0;
+
+    function showTab(tab) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        event.target.classList.add('active');
+        if (tab === 'register' && window.registrationEnabled === false) {
+            showMessage('Registration disabled by admin', 'error', 'auth');
+            return;
+        }
+
+        if (tab === 'login') {
+            document.getElementById('loginForm').classList.remove('hidden');
+            document.getElementById('registerForm').classList.add('hidden');
+        } else {
+            document.getElementById('loginForm').classList.add('hidden');
+            document.getElementById('registerForm').classList.remove('hidden');
+        }
+    }
+
+    async function register() {
+        const username = document.getElementById('regUsername').value;
+        const password = document.getElementById('regPassword').value;
+
+        try {
+            const res = await fetch('/api/register', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+
+            if (res.ok) {
+                showMessage('Registration successful! Please login.', 'success', 'auth');
+                document.getElementById('loginForm').classList.remove('hidden');
+                document.getElementById('registerForm').classList.add('hidden');
+                document.querySelectorAll('.tab')[0].classList.add('active');
+                document.querySelectorAll('.tab')[1].classList.remove('active');
+            } else {
+                const data = await res.text();
+                showMessage(data || 'Registration failed', 'error', 'auth');
+            }
+        } catch (err) {
+            showMessage('Network error: ' + err.message, 'error', 'auth');
+        }
+    }
+
+    async function login() {
+        const username = document.getElementById('loginUsername').value;
+        const password = document.getElementById('loginPassword').value;
+
+        try {
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                window.isAdmin = data.is_admin || false;
+                window.registrationEnabled = true;
+                document.getElementById('authSection').classList.add('hidden');
+                document.getElementById('mainSection').classList.remove('hidden');
+                document.getElementById('userInfo').classList.remove('hidden');
+
+                if (window.isAdmin) {
+                    try {
+                        const adminRes = await fetch('/api/admin/toggle-registration');
+                        if (adminRes.ok) {
+                            const adminData = await adminRes.json();
+                            window.registrationEnabled = adminData.enabled;
+                            document.getElementById('regStatus').textContent = adminData.enabled ? 'Enabled' : 'Disabled';
+                        }
+                    } catch (err) {
+                        console.error('Error fetching admin settings:', err);
+                    }
+                }
+
+                await loadTags();
+                await loadComics();
+            } else {
+                const error = await res.text();
+                showMessage(error || 'Invalid credentials', 'error', 'auth');
+            }
+        } catch (err) {
+            showMessage('Network error: ' + err.message, 'error', 'auth');
+        }
+    }
+
+    async function logout() {
+        await fetch('/api/logout', {method: 'POST'});
+        location.reload();
+    }
+
+    async function uploadComic() {
+        const fileInput = document.getElementById('fileUpload');
+        const file = fileInput.files[0];
+
+        if (!file) {
+            showMessage('Please select a file', 'error');
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const res = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (res.ok) {
+            showMessage('Comic uploaded successfully!', 'success');
+            fileInput.value = '';
+            loadComics();
+        } else {
+            showMessage('Upload failed', 'error');
+        }
+    }
+
+    async function loadComics() {
+        const res = await fetch('/api/comics');
+        if (res.ok) {
+            comics = await res.json();
+            renderComics();
+        } else {
+            showMessage('Failed to load comics', 'error');
+        }
+    }
+
+    async function loadTags() {
+        const res = await fetch('/api/tags');
+        if (res.ok) {
+            allTags = await res.json();
+            renderTagFilters();
+        } else {
+            showMessage('Failed to load tags', 'error');
+        }
+    }
+
+    function renderTagFilters() {
+        var container = document.getElementById('selectedTagFilters');
+        container.innerHTML = '';
+
+        selectedTags.forEach(function(tagName) {
+            var tag = allTags.find(function(t) { return t.name === tagName; });
+            var color = tag ? tag.color : '#1f6feb';
+            var filter = document.createElement('div');
+            filter.className = 'tag-filter';
+            filter.style.background = color;
+            filter.innerHTML = tagName + ' <span class="remove" style="cursor: pointer; margin-left: 8px;">x</span>';
+            filter.querySelector('.remove').onclick = function(e) {
+                e.stopPropagation();
+                selectedTags.delete(tagName);
+                renderTagFilters();
+                renderComics();
+            };
+            container.appendChild(filter);
+        });
+
+        if (selectedTags.size > 0) {
+            var clearBtn = document.createElement('button');
+            clearBtn.textContent = 'Clear Filters';
+            clearBtn.className = 'reader-btn';
+            clearBtn.style.width = 'auto';
+            clearBtn.onclick = function() {
+                selectedTags.clear();
+                renderTagFilters();
+                renderComics();
+            };
+            container.appendChild(clearBtn);
+        }
+
+        var searchInput = document.getElementById('tagSearch');
+        searchInput.oninput = function() {
+            renderTagSuggestions(searchInput.value.toLowerCase());
+        };
+        searchInput.onclick = function() {
+            renderTagSuggestions('');
+        };
+    }
+
+    function renderTagSuggestions(searchTerm) {
+        var container = document.getElementById('tagSuggestions');
+        container.innerHTML = '';
+        container.className = 'context-menu';
+
+        var availableTags = allTags.filter(function(tag) {
+            return !selectedTags.has(tag.name) &&
+                   (searchTerm === '' || tag.name.toLowerCase().indexOf(searchTerm) !== -1);
+        });
+
+        if (availableTags.length === 0) {
+            container.className = 'context-menu hidden';
+            return;
+        }
+
+        availableTags.forEach(function(tag) {
+            var item = document.createElement('div');
+            item.className = 'context-menu-item';
+            item.style.background = tag.color;
+            item.textContent = tag.name + ' (' + tag.count + ')';
+            item.onclick = function() {
+                selectedTags.add(tag.name);
+                renderTagFilters();
+                renderComics();
+                document.getElementById('tagSearch').value = '';
+                container.className = 'context-menu hidden';
+            };
+            container.appendChild(item);
+        });
+
+        var searchInput = document.getElementById('tagSearch');
+        var rect = searchInput.getBoundingClientRect();
+        container.style.left = rect.left + 'px';
+        container.style.top = (rect.bottom + window.scrollY) + 'px';
+    }
+
+    document.addEventListener('click', function(e) {
+        var suggestions = document.getElementById('tagSuggestions');
+        if (!e.target.closest('#tagSearch') && !e.target.closest('#tagSuggestions')) {
+            suggestions.className = 'context-menu hidden';
+        }
+    });
+
+    function renderComics() {
+        if (window.isAdmin) {
+            document.getElementById('adminPanel').classList.remove('hidden');
+            document.getElementById('regStatus').textContent = window.registrationEnabled ? 'Enabled' : 'Disabled';
+        } else {
+            document.getElementById('adminPanel').classList.add('hidden');
+        }
+
+        const grid = document.getElementById('comicsGrid');
+        grid.innerHTML = '';
+
+        let filtered = comics;
+        if (selectedTags.size > 0) {
+            filtered = comics.filter(comic => {
+                return Array.from(selectedTags).every(tag =>
+                    comic.tags && comic.tags.includes(tag)
+                );
+            });
+        }
+
+        filtered.forEach(comic => {
+            const card = document.createElement('div');
+            card.className = 'comic-card';
+
+            const coverContainer = document.createElement('div');
+            coverContainer.className = 'comic-cover-container';
+
+            const cover = document.createElement('img');
+            cover.className = 'comic-cover';
+            cover.src = '/api/cover/' + encodeURIComponent(comic.id);
+            cover.alt = comic.title || comic.filename;
+
+            const fallback = document.createElement('div');
+            fallback.className = 'comic-cover-fallback hidden';
+            fallback.textContent = 'COVER NOT AVAILABLE';
+            fallback.style.background = '#21262d';
+
+            if (comic.bookmarks && comic.bookmarks.length > 0) {
+                const badge = document.createElement('div');
+                badge.className = 'bookmark-badge';
+                badge.textContent = '📖 ' + comic.bookmarks.length + ' bookmark' + (comic.bookmarks.length > 1 ? 's' : '');
+                coverContainer.appendChild(badge);
+            }
+
+            cover.onerror = function() {
+                cover.classList.add('hidden');
+                fallback.classList.remove('hidden');
+            };
+
+            coverContainer.appendChild(cover);
+            coverContainer.appendChild(fallback);
+            card.appendChild(coverContainer);
+
+            const info = document.createElement('div');
+            info.className = 'comic-info';
+
+            const artistClass = comic.artist === 'Unknown' ? 'unorganized' : '';
+
+            let metaHTML = '';
+            if (comic.series) metaHTML += '<div>Series: ' + comic.series + '</div>';
+            if (comic.number) metaHTML += '<div>Issue: ' + comic.number + '</div>';
+            if (comic.year) metaHTML += '<div>Year: ' + comic.year + '</div>';
+            if (comic.page_count) metaHTML += '<div>Pages: ' + comic.page_count + '</div>';
+
+            let tagsHTML = '';
+            if (comic.tags && comic.tags.length > 0) {
+                tagsHTML = '<div class="comic-tags">';
+                comic.tags.forEach(tagName => {
+                    const tag = allTags.find(t => t.name === tagName);
+                    const color = tag ? tag.color : '#1f6feb';
+                    tagsHTML += '<span class="comic-tag" style="background: ' + color + '">' + tagName + '</span>';
+                });
+                tagsHTML += '</div>';
+            }
+
+            info.innerHTML =
+                '<div class="comic-title">' + (comic.title || comic.filename) + '</div>' +
+                '<div class="comic-meta">' + metaHTML + '</div>' +
+                '<span class="comic-artist ' + artistClass + '">' + comic.artist + '</span>' +
+                tagsHTML;
+
+            card.appendChild(info);
+
+            card.onclick = function(e) {
+                if (e.target.classList.contains('comic-tag')) {
+                    return;
+                }
+                if (e.target.classList.contains('bookmark-badge') && comic.bookmarks && comic.bookmarks.length > 0) {
+                    openReaderAtBookmark(comic, comic.bookmarks[0]);
+                    return;
+                }
+                openReader(comic);
+            };
+
+            card.oncontextmenu = function(e) {
+                e.preventDefault();
+                showContextMenu(e, comic);
+            };
+
+            grid.appendChild(card);
+        });
+    }
+
+    function showContextMenu(e, comic) {
+        const menu = document.getElementById('contextMenu');
+        menu.className = 'context-menu';
+        menu.innerHTML = '<div class="context-menu-item" onclick="openTagModal(\'' + comic.id + '\')">Manage Tags</div>';
+
+        if (comic.bookmarks && comic.bookmarks.length > 0) {
+            menu.innerHTML += '<div class="context-menu-item" onclick="openReaderAtBookmark(comics.find(c => c.id === \'' + comic.id + '\'), ' + comic.bookmarks[0] + ')">Go to First Bookmark (Page ' + (comic.bookmarks[0] + 1) + ')</div>';
+        }
+
+        menu.style.left = e.pageX + 'px';
+        menu.style.top = e.pageY + 'px';
+
+        document.addEventListener('click', function hideMenu() {
+            menu.className = 'context-menu hidden';
+            document.removeEventListener('click', hideMenu);
+        });
+    }
+
+    function openTagModal(comicId) {
+        managingComic = comics.find(c => c.id === comicId);
+        if (!managingComic) return;
+
+        document.getElementById('tagModal').classList.add('active');
+        renderCurrentTags();
+        renderAvailableTags();
+    }
+
+    function closeTagModal() {
+        document.getElementById('tagModal').classList.remove('active');
+        managingComic = null;
+        loadComics();
+        loadTags();
+    }
+
+    function renderCurrentTags() {
+        const container = document.getElementById('currentTags');
+        container.innerHTML = '';
+
+        if (!managingComic.tags || managingComic.tags.length === 0) {
+            container.innerHTML = '<div style="color: #8b949e; font-size: 13px;">No tags assigned</div>';
+            return;
+        }
+
+        managingComic.tags.forEach(tagName => {
+            const tag = allTags.find(t => t.name === tagName);
+            const color = tag ? tag.color : '#1f6feb';
+
+            const item = document.createElement('div');
+            item.className = 'tag-item';
+            item.style.background = color;
+            item.innerHTML = tagName + ' <span class="remove">×</span>';
+            item.querySelector('.remove').onclick = function(e) {
+                e.stopPropagation();
+                removeTag(tagName);
+            };
+            container.appendChild(item);
+        });
+    }
+
+    function renderAvailableTags() {
+        const container = document.getElementById('availableTags');
+        container.innerHTML = '';
+
+        const available = allTags.filter(tag =>
+            !managingComic.tags || !managingComic.tags.includes(tag.name)
+        );
+
+        if (available.length === 0) {
+            container.innerHTML = '<div style="color: #8b949e; font-size: 13px;">All tags assigned</div>';
+            return;
+        }
+
+        available.forEach(tag => {
+            const item = document.createElement('div');
+            item.className = 'tag-item';
+            item.style.background = tag.color;
+            item.textContent = tag.name;
+            item.onclick = function() {
+                addTagToComic(tag.name);
+            };
+            container.appendChild(item);
+        });
+    }
+
+    async function addTagToComic(tagName) {
+        const res = await fetch('/api/comic-tags/' + encodeURIComponent(managingComic.id), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({tag: tagName})
+        });
+
+        if (res.ok) {
+            const updated = await res.json();
+            managingComic = updated;
+            const idx = comics.findIndex(c => c.id === updated.id);
+            if (idx >= 0) comics[idx] = updated;
+            renderCurrentTags();
+            renderAvailableTags();
+        }
+    }
+
+    async function removeTag(tagName) {
+        const res = await fetch('/api/comic-tags/' + encodeURIComponent(managingComic.id) + '/' + encodeURIComponent(tagName), {
+            method: 'DELETE'
+        });
+
+        if (res.ok) {
+            const updated = await res.json();
+            managingComic = updated;
+            const idx = comics.findIndex(c => c.id === updated.id);
+            if (idx >= 0) comics[idx] = updated;
+            renderCurrentTags();
+            renderAvailableTags();
+        }
+    }
+
+    async function createTag() {
+        const name = document.getElementById('newTagName').value.trim();
+        const color = document.getElementById('newTagColor').value;
+
+        if (!name) {
+            showMessage('Please enter a tag name', 'error');
+            return;
+        }
+
+        const res = await fetch('/api/tags', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, color})
+        });
+
+        if (res.ok) {
+            document.getElementById('newTagName').value = '';
+            document.getElementById('newTagColor').value = '#1f6feb';
+            loadTags();
+            renderAvailableTags();
+            showMessage('Tag created!', 'success');
+        } else {
+            showMessage('Failed to create tag', 'error');
+        }
+    }
+
+    // Initialize pan functionality
+    function initializePan() {
+        const container = document.getElementById('imageContainer');
+        const img = document.getElementById('comicImage');
+
+        container.addEventListener('mousedown', startPan);
+        container.addEventListener('mousemove', doPan);
+        container.addEventListener('mouseup', endPan);
+        container.addEventListener('mouseleave', endPan);
+
+        // Touch support for mobile
+        container.addEventListener('touchstart', handleTouchStart, {passive: false});
+        container.addEventListener('touchmove', handleTouchMove, {passive: false});
+        container.addEventListener('touchend', endPan);
+    }
+
+    function startPan(e) {
+        if (zoomLevel <= 1) return; // Only pan when zoomed in
+
+        isPanning = true;
+        const container = document.getElementById('imageContainer');
+        container.classList.add('panning');
+
+        panStartX = e.clientX - currentPanX;
+        panStartY = e.clientY - currentPanY;
+
+        e.preventDefault();
+    }
+
+    function doPan(e) {
+        if (!isPanning) return;
+
+        e.preventDefault();
+
+        currentPanX = e.clientX - panStartX;
+        currentPanY = e.clientY - panStartY;
+
+        updateImageTransform();
+    }
+
+    function endPan(e) {
+        if (isPanning) {
+            isPanning = false;
+            const container = document.getElementById('imageContainer');
+            container.classList.remove('panning');
+        }
+    }
+
+    function handleTouchStart(e) {
+        if (zoomLevel <= 1 || e.touches.length !== 1) return;
+
+        isPanning = true;
+        const container = document.getElementById('imageContainer');
+        container.classList.add('panning');
+
+        const touch = e.touches[0];
+        panStartX = touch.clientX - currentPanX;
+        panStartY = touch.clientY - currentPanY;
+
+        e.preventDefault();
+    }
+
+    function handleTouchMove(e) {
+        if (!isPanning || e.touches.length !== 1) return;
+
+        e.preventDefault();
+
+        const touch = e.touches[0];
+        currentPanX = touch.clientX - panStartX;
+        currentPanY = touch.clientY - panStartY;
+
+        updateImageTransform();
+    }
+
+    function updateImageTransform() {
+        const img = document.getElementById('comicImage');
+        img.style.transform = `translate(calc(-50% + ${currentPanX}px), calc(-50% + ${currentPanY}px)) scale(${zoomLevel})`;
+    }
+
+    async function openReader(comic) {
+        currentComic = comic;
+        currentPage = 0;
+
+        document.getElementById('readerTitle').textContent = comic.title || comic.filename;
+        document.getElementById('readerModal').classList.add('active');
+
+        if (comic.encrypted && !comic.has_password) {
+            await showPasswordModal(comic);
+            return;
+        }
+
+        const encodedId = encodeURIComponent(currentComic.id);
+        const url = '/api/pages/' + encodedId;
+
+        try {
+            const res = await fetch(url);
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.needs_password) {
+                    alert('Password required but not set. Please re-open the comic.');
+                    closeReader();
+                    return;
+                }
+                totalPages = data.page_count;
+                document.getElementById('totalPages').textContent = totalPages;
+                document.getElementById('pageInput').max = totalPages;
+
+                if (totalPages > 0) {
+                    loadPage(0);
+                    updateBookmarkUI();
+                } else {
+                    showMessage('No pages found in comic', 'error');
+                }
+            } else {
+                const error = await res.text();
+                showMessage('Error loading comic: ' + error, 'error');
+            }
+        } catch (err) {
+            showMessage('Error: ' + err.message, 'error');
+        }
+    }
+
+    async function openReaderAtBookmark(comic, bookmarkPage) {
+        currentComic = comic;
+        currentPage = bookmarkPage || 0;
+
+        document.getElementById('readerTitle').textContent = comic.title || comic.filename;
+        document.getElementById('readerModal').classList.add('active');
+
+        if (comic.encrypted && !comic.has_password) {
+            await showPasswordModal(comic);
+            return;
+        }
+
+        const encodedId = encodeURIComponent(currentComic.id);
+        const url = '/api/pages/' + encodedId;
+
+        try {
+            const res = await fetch(url);
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.needs_password) {
+                    alert('Password required but not set. Please re-open the comic.');
+                    closeReader();
+                    return;
+                }
+                totalPages = data.page_count;
+                document.getElementById('totalPages').textContent = totalPages;
+                document.getElementById('pageInput').max = totalPages;
+
+                if (totalPages > 0) {
+                    loadPage(currentPage);
+                    updateBookmarkUI();
+                } else {
+                    showMessage('No pages found in comic', 'error');
+                }
+            } else {
+                const error = await res.text();
+                showMessage('Error loading comic: ' + error, 'error');
+            }
+        } catch (err) {
+            showMessage('Error: ' + err.message, 'error');
+        }
+    }
+
+    function closeReader() {
+        document.getElementById('readerModal').classList.remove('active');
+        document.getElementById('bookmarkList').style.display = 'none';
+        currentComic = null;
+        resetZoom();
+    }
+
+    async function loadPage(pageNum) {
+        if (pageNum < 0 || pageNum >= totalPages) return;
+
+        currentPage = pageNum;
+        document.getElementById('pageInput').value = currentPage + 1;
+
+        const img = document.getElementById('comicImage');
+        const encodedId = encodeURIComponent(currentComic.id);
+        const imgUrl = '/api/comic/' + encodedId + '/page/' + currentPage;
+
+        img.src = imgUrl;
+
+        img.onerror = function() {
+            showMessage('Failed to load page ' + (currentPage + 1), 'error');
+        };
+
+        document.getElementById('prevBtn').disabled = currentPage === 0;
+        document.getElementById('nextBtn').disabled = currentPage === totalPages - 1;
+
+        updateBookmarkUI();
+        resetZoom();
+    }
+
+    function updateBookmarkUI() {
+        if (!currentComic.bookmarks) {
+            currentComic.bookmarks = [];
+        }
+
+        const isBookmarked = currentComic.bookmarks.includes(currentPage);
+        const btn = document.getElementById('bookmarkBtn');
+        const indicator = document.getElementById('bookmarkIndicator');
+        const count = document.getElementById('bookmarkCount');
+
+        btn.textContent = isBookmarked ? '📖 Remove Bookmark' : '📖 Bookmark Page';
+        count.textContent = currentComic.bookmarks.length;
+
+        if (isBookmarked) {
+            indicator.style.display = 'flex';
+            document.getElementById('bookmarkText').textContent = 'Current page bookmarked';
+        } else {
+            indicator.style.display = 'none';
+        }
+
+        renderBookmarkList();
+    }
+
+    function toggleBookmarkList() {
+        const list = document.getElementById('bookmarkList');
+        list.style.display = list.style.display === 'none' ? 'block' : 'none';
+    }
+
+    function renderBookmarkList() {
+        const container = document.getElementById('bookmarkListItems');
+        container.innerHTML = '';
+
+        if (!currentComic.bookmarks || currentComic.bookmarks.length === 0) {
+            container.innerHTML = '<div style="color: #8b949e; font-size: 12px; padding: 8px;">No bookmarks</div>';
+            return;
+        }
+
+        currentComic.bookmarks.forEach(page => {
+            const item = document.createElement('div');
+            item.className = 'bookmark-list-item' + (page === currentPage ? ' current' : '');
+
+            const pageText = document.createElement('span');
+            pageText.textContent = 'Page ' + (page + 1);
+            pageText.style.flex = '1';
+            pageText.onclick = function() {
+                loadPage(page);
+                document.getElementById('bookmarkList').style.display = 'none';
+            };
+
+            const deleteBtn = document.createElement('span');
+            deleteBtn.className = 'bookmark-delete';
+            deleteBtn.textContent = '×';
+            deleteBtn.onclick = function(e) {
+                e.stopPropagation();
+                removeBookmark(page);
+            };
+
+            item.appendChild(pageText);
+            item.appendChild(deleteBtn);
+            container.appendChild(item);
+        });
+    }
+
+    async function toggleBookmark() {
+        const isBookmarked = currentComic.bookmarks && currentComic.bookmarks.includes(currentPage);
+
+        if (isBookmarked) {
+            await removeBookmark(currentPage);
+        } else {
+            await addBookmark(currentPage);
+        }
+    }
+
+    async function addBookmark(page) {
+        const res = await fetch('/api/bookmark/' + encodeURIComponent(currentComic.id), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({page: page})
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            currentComic.bookmarks = data.bookmarks;
+            const idx = comics.findIndex(c => c.id === currentComic.id);
+            if (idx >= 0) {
+                comics[idx].bookmarks = data.bookmarks;
+            }
+            updateBookmarkUI();
+            showMessage('Bookmark added!', 'success');
+        } else {
+            showMessage('Failed to add bookmark', 'error');
+        }
+    }
+
+    async function removeBookmark(page) {
+        const res = await fetch('/api/bookmark/' + encodeURIComponent(currentComic.id) + '/' + page, {
+            method: 'DELETE'
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            currentComic.bookmarks = data.bookmarks;
+            const idx = comics.findIndex(c => c.id === currentComic.id);
+            if (idx >= 0) {
+                comics[idx].bookmarks = data.bookmarks;
+            }
+            updateBookmarkUI();
+            showMessage('Bookmark removed!', 'success');
+            loadComics();
+        } else {
+            showMessage('Failed to remove bookmark', 'error');
+        }
+    }
+
+    function nextPage() {
+        if (currentPage < totalPages - 1) {
+            loadPage(currentPage + 1);
+        }
+    }
+
+    function prevPage() {
+        if (currentPage > 0) {
+            loadPage(currentPage - 1);
+        }
+    }
+
+    function goToPage() {
+        const pageNum = parseInt(document.getElementById('pageInput').value) - 1;
+        if (pageNum >= 0 && pageNum < totalPages) {
+            loadPage(pageNum);
+        }
+    }
+
+    function zoomIn() {
+        zoomLevel = Math.min(zoomLevel + 0.25, 5);
+        applyZoom();
+    }
+
+    function zoomOut() {
+        zoomLevel = Math.max(zoomLevel - 0.25, 0.25);
+        applyZoom();
+    }
+
+    function resetZoom() {
+        zoomLevel = 1;
+        currentPanX = 0;
+        currentPanY = 0;
+        applyZoom();
+    }
+
+    function applyZoom() {
+        updateImageTransform();
+
+        // Show/hide grab cursor based on zoom level
+        const container = document.getElementById('imageContainer');
+        if (zoomLevel > 1) {
+            container.style.cursor = 'grab';
+        } else {
+            container.style.cursor = 'default';
+        }
+    }
+
+    function toggleFitMode() {
+        const modes = ['width', 'height', 'page'];
+        const currentIndex = modes.indexOf(fitMode);
+        fitMode = modes[(currentIndex + 1) % modes.length];
+
+        const img = document.getElementById('comicImage');
+
+        img.style.maxWidth = '';
+        img.style.maxHeight = '';
+        img.style.width = '';
+        img.style.height = '';
+
+        if (fitMode === 'width') {
+            img.style.maxWidth = '100%';
+            img.style.height = 'auto';
+        } else if (fitMode === 'height') {
+            img.style.maxHeight = '100%';
+            img.style.width = 'auto';
+        } else {
+            img.style.maxWidth = '100%';
+            img.style.maxHeight = '100%';
+        }
+
+        document.getElementById('fitMode').textContent = fitMode.charAt(0).toUpperCase() + fitMode.slice(1);
+    }
+
+    document.addEventListener('keydown', function(e) {
+        if (document.getElementById('passwordModal').classList.contains('active')) {
+            if (e.key === 'Enter') {
+                submitPassword();
+                return;
+            }
+            if (e.key === 'Escape') {
+                cancelPassword();
+                return;
+            }
+        }
+        if (!currentComic) return;
+
+        if (e.key === 'ArrowRight' || e.key === 'd') nextPage();
+        if (e.key === 'ArrowLeft' || e.key === 'a') prevPage();
+        if (e.key === 'Escape') closeReader();
+        if (e.key === '+' || e.key === '=') zoomIn();
+        if (e.key === '-' || e.key === '_') zoomOut();
+        if (e.key === '0') resetZoom();
+    });
+
+    function showMessage(text, type, context = 'main') {
+        let msg;
+        if (context === 'auth') {
+            msg = document.getElementById('authMessage');
+        } else {
+            msg = document.getElementById('message');
+        }
+        msg.textContent = text;
+        msg.className = 'message ' + type;
+        setTimeout(function() { msg.className = 'message hidden'; }, 5000);
+    }
+
+    async function toggleRegistration() {
+        try {
+            const res = await fetch('/api/admin/toggle-registration', {method: 'POST'});
+            if (res.ok) {
+                const data = await res.json();
+                window.registrationEnabled = data.enabled;
+                document.getElementById('regStatus').textContent = data.enabled ? 'Enabled' : 'Disabled';
+                showMessage('Registration toggled!', 'success');
+            } else {
+                showMessage('Toggle failed: ' + (await res.text()), 'error');
+            }
+        } catch (err) {
+            showMessage('Network error: ' + err.message, 'error');
+        }
+    }
+
+    async function deleteComic() {
+        const id = document.getElementById('deleteId').value.trim();
+        if (!id) {
+            showMessage('Please enter a comic ID', 'error');
+            return;
+        }
+        if (!confirm('Delete comic ID: ' + id + '?')) return;
+        try {
+            const res = await fetch('/api/admin/delete-comic/' + encodeURIComponent(id), {method: 'DELETE'});
+            if (res.ok) {
+                loadComics();
+                showMessage('Comic deleted!', 'success');
+                document.getElementById('deleteId').value = '';
+            } else {
+                showMessage('Delete failed: ' + (await res.text()), 'error');
+            }
+        } catch (err) {
+            showMessage('Network error: ' + err.message, 'error');
+        }
+    }
+
+    let pendingPasswordComic = null;
+
+    async function showPasswordModal(comic) {
+        pendingPasswordComic = comic;
+        document.getElementById('passwordComicTitle').textContent = comic.title || comic.filename;
+        document.getElementById('passwordInput').value = '';
+        document.getElementById('passwordError').className = 'password-error hidden';
+        document.getElementById('passwordModal').classList.add('active');
+        document.getElementById('passwordInput').focus();
+    }
+
+    function cancelPassword() {
+        document.getElementById('passwordModal').classList.remove('active');
+        document.getElementById('readerModal').classList.remove('active');
+        pendingPasswordComic = null;
+    }
+
+    async function submitPassword() {
+        const pwd = document.getElementById('passwordInput').value;
+        if (!pwd) {
+            showPasswordError('Please enter a password');
+            return;
+        }
+
+        const res = await fetch("/api/set-password/" + encodeURIComponent(pendingPasswordComic.id), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({password: pwd})
+        });
+
+        if (!res.ok) {
+            showPasswordError('Invalid password. Please try again.');
+            document.getElementById('passwordInput').value = '';
+            document.getElementById('passwordInput').focus();
+            return;
+        }
+
+        document.getElementById('passwordModal').classList.remove('active');
+        await loadComics();
+        await loadTags();
+        currentComic = comics.find(c => c.id === pendingPasswordComic.id);
+        pendingPasswordComic = null;
+
+        continueOpenReader();
+    }
+
+    function showPasswordError(message) {
+        const errorDiv = document.getElementById('passwordError');
+        errorDiv.textContent = message;
+        errorDiv.className = 'password-error';
+    }
+
+    async function continueOpenReader() {
+        const encodedId = encodeURIComponent(currentComic.id);
+        const url = '/api/pages/' + encodedId;
+
+        try {
+            const res = await fetch(url);
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.needs_password) {
+                    alert('Password required but not set. Please re-open the comic.');
+                    closeReader();
+                    return;
+                }
+                totalPages = data.page_count;
+                document.getElementById('totalPages').textContent = totalPages;
+                document.getElementById('pageInput').max = totalPages;
+
+                if (totalPages > 0) {
+                    loadPage(0);
+                } else {
+                    showMessage('No pages found in comic', 'error');
+                }
+            } else {
+                const error = await res.text();
+                showMessage('Error loading comic: ' + error, 'error');
+            }
+        } catch (err) {
+            showMessage('Error: ' + err.message, 'error');
+        }
+    }
+
+    // Initialize pan when page loads
+    window.addEventListener('load', function() {
+        initializePan();
+    });
+
+    fetch('/api/user')
+    .then(function(res) {
+        if (res.ok) {
+            return res.json();
+        }
+    })
+    .then(function(data) {
+        if (data) {
+            window.isAdmin = data.is_admin || false;
+            if (window.isAdmin) {
+                fetch('/api/admin/toggle-registration')
+                    .then(function(adminRes) {
+                        if (adminRes.ok) return adminRes.json();
+                    })
+                    .then(function(adminData) {
+                        if (adminData) {
+                            window.registrationEnabled = adminData.enabled;
+                        }
+                    });
+            }
+        }
+    })
+    .catch(function(err) {
+        console.error('User fetch failed:', err);
+    });
+
+    fetch('/api/comics')
+    .then(function(res) {
+        if (res.ok) {
+            document.getElementById('authSection').classList.add('hidden');
+            document.getElementById('mainSection').classList.remove('hidden');
+            document.getElementById('userInfo').classList.remove('hidden');
+            loadTags().then(loadComics);
+        }
+    })
+    .catch(function(err) {
+        console.error('Initial comics fetch failed:', err);
+    });
+    </script>
+</body>
+</html>
