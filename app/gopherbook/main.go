@@ -4,8 +4,8 @@ import (
 	"archive/zip"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/sha256"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
@@ -15,8 +15,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -36,8 +36,8 @@ type ComicInfo struct {
 	Artist    string   `xml:"Artist"`
 	Inker     string   `xml:"Inker"`
 	Publisher string   `xml:"Publisher"`
-	Genre     string   `xml:"Genre"`   // Standard field
-	TagsXml   string   `xml:"Tags"`    // User-requested field for flexibility
+	Genre     string   `xml:"Genre"`
+	TagsXml   string   `xml:"Tags"`
 	StoryArc  string   `xml:"StoryArc"`
 	Year      string   `xml:"Year"`
 	Month     string   `xml:"Month"`
@@ -46,9 +46,9 @@ type ComicInfo struct {
 }
 
 type User struct {
-    Username     string `json:"username"`
-    PasswordHash string `json:"password_hash"`
-    IsAdmin      bool   `json:"is_admin"`  // NEW
+	Username     string `json:"username"`
+	PasswordHash string `json:"password_hash"`
+	IsAdmin      bool   `json:"is_admin"`
 }
 
 type Comic struct {
@@ -67,9 +67,10 @@ type Comic struct {
 	FileType    string    `json:"file_type"`
 	Encrypted   bool      `json:"encrypted"`
 	HasPassword bool      `json:"has_password"`
-	Password    string    `json:"-"` // Don't expose password in JSON
+	Password    string    `json:"-"`
 	Tags        []string  `json:"tags"`
 	UploadedAt  time.Time `json:"uploaded_at"`
+	Bookmarks   []int     `json:"bookmarks"`
 }
 
 type Session struct {
@@ -84,32 +85,30 @@ type Tag struct {
 }
 
 var (
-	users          = make(map[string]User)
-	sessions       = make(map[string]Session)
-	comics         = make(map[string]Comic)
-	tags           = make(map[string]Tag)
-	comicPasswords = make(map[string]string)
-	comicsMutex    sync.RWMutex
-	sessionsMutex  sync.RWMutex
-	tagsMutex      sync.RWMutex
-	passwordsMutex sync.RWMutex
+	users                = make(map[string]User)
+	sessions             = make(map[string]Session)
+	comics               = make(map[string]Comic)
+	tags                 = make(map[string]Tag)
+	comicPasswords       = make(map[string]string)
+	comicsMutex          sync.RWMutex
+	sessionsMutex        sync.RWMutex
+	tagsMutex            sync.RWMutex
+	passwordsMutex       sync.RWMutex
 	currentEncryptionKey []byte
-	libraryPath    = "./library"
-	cachePath      = "./cache/covers"
-	etcPath      = "./etc"
-	currentUser    string
-	registrationEnabled = true
+	libraryPath          = "./library"
+	cachePath            = "./cache/covers"
+	etcPath              = "./etc"
+	currentUser          string
+	registrationEnabled  = true
 )
 
 func main() {
-	// Initialize directories
 	os.MkdirAll(filepath.Join(libraryPath, "Unorganized"), 0755)
 	os.MkdirAll(cachePath, 0755)
 	os.MkdirAll(etcPath, 0755)
 
-	// Load users, comics, and tags
 	loadUsers()
-	// Setup routes
+
 	http.HandleFunc("/api/register", handleRegister)
 	http.HandleFunc("/api/login", handleLogin)
 	http.HandleFunc("/api/logout", handleLogout)
@@ -122,6 +121,7 @@ func main() {
 	http.HandleFunc("/api/tags", authMiddleware(handleTags))
 	http.HandleFunc("/api/comic-tags/", authMiddleware(handleComicTags))
 	http.HandleFunc("/api/set-password/", authMiddleware(handleSetPassword))
+	http.HandleFunc("/api/bookmark/", authMiddleware(handleBookmark))
 	http.HandleFunc("/api/admin/toggle-registration", authMiddleware(handleToggleRegistration))
 	http.HandleFunc("/api/admin/delete-comic/", authMiddleware(handleDeleteComic))
 	http.HandleFunc("/", serveUI)
@@ -134,179 +134,164 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if r.Method != http.MethodPost {
-		log.Println("Register: Method not POST")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if !registrationEnabled {
-	    http.Error(w, "Registration disabled", http.StatusForbidden)
-	    return
+		http.Error(w, "Registration disabled", http.StatusForbidden)
+		return
 	}
+
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("Register: JSON decode error: %v", err)
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Register attempt: username=%s", req.Username)
-
 	if req.Username == "" || req.Password == "" {
-		log.Println("Register: Empty username or password")
 		http.Error(w, "Username and password required", http.StatusBadRequest)
 		return
 	}
 
 	if _, exists := users[req.Username]; exists {
-		log.Printf("Register: User %s already exists", req.Username)
 		http.Error(w, "User already exists", http.StatusConflict)
 		return
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		log.Printf("Register: Bcrypt error: %v", err)
 		http.Error(w, "Error creating user", http.StatusInternalServerError)
 		return
 	}
 
-	// Replace the user creation block (after hash generation):
 	users[req.Username] = User{
-	    Username:     req.Username,
-	    PasswordHash: string(hash),
-	    IsAdmin:      len(users) == 0,  // NEW: First user is admin
+		Username:     req.Username,
+		PasswordHash: string(hash),
+		IsAdmin:      len(users) == 0,
 	}
 	saveUsers()
-	if len(users) == 1 {  // NEW: Init admin config
-	    saveAdminConfig()
-	    registrationEnabled = true
+	if len(users) == 1 {
+		saveAdminConfig()
+		registrationEnabled = true
 	}
-	// Create per-user directories
+
 	userLibrary := filepath.Join("./library", req.Username)
 	os.MkdirAll(filepath.Join(userLibrary, "Unorganized"), 0755)
 	os.MkdirAll(filepath.Join("./cache/covers", req.Username), 0755)
 
-	log.Printf("Register: User %s created successfully", req.Username)
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"message": "User created"})
 }
 
 func handleToggleRegistration(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodPost && r.Method != http.MethodGet {
-        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
-    user := getCurrentUser(r)
-    if !user.IsAdmin {
-        http.Error(w, "Admin only", http.StatusForbidden)
-        return
-    }
-    if r.Method == http.MethodPost {
-        registrationEnabled = !registrationEnabled
-        saveAdminConfig()
-    }
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(map[string]bool{"enabled": registrationEnabled})
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getCurrentUser(r)
+	if !user.IsAdmin {
+		http.Error(w, "Admin only", http.StatusForbidden)
+		return
+	}
+	if r.Method == http.MethodPost {
+		registrationEnabled = !registrationEnabled
+		saveAdminConfig()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"enabled": registrationEnabled})
 }
 
 func getCurrentUser(r *http.Request) User {
-    cookie, err := r.Cookie("session")
-    if err != nil {
-        return User{} // Empty user if no cookie
-    }
-    sessionsMutex.RLock()
-    session, exists := sessions[cookie.Value]
-    sessionsMutex.RUnlock()
-    if !exists {
-        return User{}
-    }
-    return users[session.Username]
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		return User{}
+	}
+	sessionsMutex.RLock()
+	session, exists := sessions[cookie.Value]
+	sessionsMutex.RUnlock()
+	if !exists {
+		return User{}
+	}
+	return users[session.Username]
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 
-    if r.Method != http.MethodPost {
-        log.Println("Login: Method not POST")
-        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-    var req struct {
-        Username string `json:"username"`
-        Password string `json:"password"`
-    }
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
 
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        log.Printf("Login: JSON decode error: %v", err)
-        http.Error(w, "Invalid request", http.StatusBadRequest)
-        return
-    }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
 
-    log.Printf("Login attempt: username=%s", req.Username)
+	user, exists := users[req.Username]
+	if !exists {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
 
-    user, exists := users[req.Username]
-    if !exists {
-        log.Printf("Login: User %s not found", req.Username)
-        http.Error(w, "Invalid credentials", http.StatusUnauthorized)
-        return
-    }
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
 
-    if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-        log.Printf("Login: Password mismatch for %s", req.Username)
-        http.Error(w, "Invalid credentials", http.StatusUnauthorized)
-        return
-    }
+	token := generateToken()
+	sessionsMutex.Lock()
+	sessions[token] = Session{
+		Username:  req.Username,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	sessionsMutex.Unlock()
 
-    token := generateToken()
-    sessionsMutex.Lock()
-    sessions[token] = Session{
-        Username:  req.Username,
-        ExpiresAt: time.Now().Add(24 * time.Hour),
-    }
-    sessionsMutex.Unlock()
+	currentUser = req.Username
+	key := deriveKey(req.Password)
+	libraryPath = filepath.Join("./library", currentUser)
+	cachePath = filepath.Join("./cache/covers", currentUser)
+	os.MkdirAll(filepath.Join(libraryPath, "Unorganized"), 0755)
+	os.MkdirAll(cachePath, 0755)
 
-    currentUser = req.Username
-    key := deriveKey(req.Password)
-    libraryPath = filepath.Join("./library", currentUser)
-    cachePath = filepath.Join("./cache/covers", currentUser)
-    os.MkdirAll(filepath.Join(libraryPath, "Unorganized"), 0755)
-    os.MkdirAll(cachePath, 0755)
+	comicsMutex.Lock()
+	comics = make(map[string]Comic)
+	comicsMutex.Unlock()
+	tagsMutex.Lock()
+	tags = make(map[string]Tag)
+	tagsMutex.Unlock()
+	passwordsMutex.Lock()
+	comicPasswords = make(map[string]string)
+	passwordsMutex.Unlock()
 
-    comicsMutex.Lock()
-    comics = make(map[string]Comic)
-    comicsMutex.Unlock()
-    tagsMutex.Lock()
-    tags = make(map[string]Tag)
-    tagsMutex.Unlock()
-    passwordsMutex.Lock()
-    comicPasswords = make(map[string]string)
-    passwordsMutex.Unlock()
+	loadComics()
+	loadTags()
+	loadPasswordsWithKey(key)
+	currentEncryptionKey = key
+	scanLibrary()
 
-    loadComics()
-    loadTags()
-    loadPasswordsWithKey(key)
-    currentEncryptionKey = key
-    scanLibrary()
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    token,
+		Expires:  time.Now().Add(24 * time.Hour),
+		HttpOnly: true,
+		Path:     "/",
+	})
 
-    http.SetCookie(w, &http.Cookie{
-        Name:     "session",
-        Value:    token,
-        Expires:  time.Now().Add(24 * time.Hour),
-        HttpOnly: true,
-        Path:     "/",
-    })
-
-    log.Printf("Login: User %s logged in successfully", req.Username)
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "message":   "Login successful",
-        "token":     token,
-        "is_admin":  user.IsAdmin,
-    })
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":  "Login successful",
+		"token":    token,
+		"is_admin": user.IsAdmin,
+	})
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -316,7 +301,7 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 		delete(sessions, cookie.Value)
 		sessionsMutex.Unlock()
 	}
-	// Clear sensitive data from memory
+
 	comicsMutex.Lock()
 	comics = make(map[string]Comic)
 	comicsMutex.Unlock()
@@ -328,7 +313,7 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 	passwordsMutex.Unlock()
 	currentEncryptionKey = nil
 	currentUser = ""
-	libraryPath = "./library"  // Reset to default
+	libraryPath = "./library"
 	cachePath = "./cache/covers"
 
 	http.SetCookie(w, &http.Cookie{
@@ -356,7 +341,6 @@ func handleComics(w http.ResponseWriter, r *http.Request) {
 		comicList = append(comicList, comic)
 	}
 
-	// Sort by artist, then series, then number
 	sort.Slice(comicList, func(i, j int) bool {
 		if comicList[i].Artist != comicList[j].Artist {
 			return comicList[i].Artist < comicList[j].Artist
@@ -377,7 +361,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.ParseMultipartForm(100 << 20) // 100 MB max
+	r.ParseMultipartForm(100 << 20)
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
@@ -389,16 +373,11 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	filename := header.Filename
 	ext := strings.ToLower(filepath.Ext(filename))
 
-	validExts := map[string]bool{
-		".cbz": true,
-	}
-
-	if !validExts[ext] {
+	if ext != ".cbz" {
 		http.Error(w, "Invalid file type", http.StatusBadRequest)
 		return
 	}
 
-	// Save to Unorganized initially
 	destPath := filepath.Join(libraryPath, "Unorganized", filename)
 	destFile, err := os.Create(destPath)
 	if err != nil {
@@ -412,16 +391,13 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Process the comic
 	comic := processComic(destPath, filename)
 
-	// Must lock/unlock to ensure generateCoverCache sees the comic in the map,
-	// especially if it finds a password and needs to persist it.
 	comicsMutex.Lock()
 	comics[comic.ID] = comic
 	comicsMutex.Unlock()
 
-	generateCoverCache(&comic) // Pass reference to updated comic struct
+	generateCoverCache(&comic)
 
 	saveComics()
 
@@ -429,32 +405,32 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleDeleteComic(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodDelete {
-        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
-    user := getCurrentUser(r)
-    if !user.IsAdmin {
-        http.Error(w, "Admin only", http.StatusForbidden)
-        return
-    }
-    id := strings.TrimPrefix(r.URL.Path, "/api/admin/delete-comic/")
-    decodedID, _ := url.QueryUnescape(id)
-    comicsMutex.Lock()
-    comic, exists := comics[decodedID]
-    if exists {
-        os.Remove(comic.FilePath)
-        for _, tag := range comic.Tags {
-            updateTagCount(tag, -1)
-        }
-        delete(comics, decodedID)
-        saveComics()
-        saveTags()
-    }
-    comicsMutex.Unlock()
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusOK)
-    json.NewEncoder(w).Encode(map[string]string{"message": "Deleted"})
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getCurrentUser(r)
+	if !user.IsAdmin {
+		http.Error(w, "Admin only", http.StatusForbidden)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/admin/delete-comic/")
+	decodedID, _ := url.QueryUnescape(id)
+	comicsMutex.Lock()
+	comic, exists := comics[decodedID]
+	if exists {
+		os.Remove(comic.FilePath)
+		for _, tag := range comic.Tags {
+			updateTagCount(tag, -1)
+		}
+		delete(comics, decodedID)
+		saveComics()
+		saveTags()
+	}
+	comicsMutex.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Deleted"})
 }
 
 func handleCover(w http.ResponseWriter, r *http.Request) {
@@ -476,14 +452,12 @@ func handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check cache first
 	cacheFile := filepath.Join(cachePath, comic.ID+".jpg")
 	if _, err := os.Stat(cacheFile); err == nil {
 		http.ServeFile(w, r, cacheFile)
 		return
 	}
 
-	// Generate on-the-fly
 	if comic.FileType == ".cbz" {
 		serveCoverFromCBZ(w, r, comic)
 	} else {
@@ -581,7 +555,6 @@ func handleComicTags(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Add tag if not already present
 		found := false
 		for _, t := range comic.Tags {
 			if t == req.Tag {
@@ -670,7 +643,6 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify password by trying to open ComicInfo.xml
 	yr, err := yzip.OpenReader(comic.FilePath)
 	if err != nil {
 		http.Error(w, "Error reading comic", http.StatusInternalServerError)
@@ -691,7 +663,6 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 			if readErr != nil || len(data) == 0 {
 				break
 			}
-			// Quick XML check
 			var info ComicInfo
 			if xml.Unmarshal(data, &info) == nil {
 				valid = true
@@ -705,7 +676,6 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set and save
 	comicsMutex.Lock()
 	c := comics[decodedID]
 	c.Password = req.Password
@@ -718,46 +688,42 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	passwordsMutex.Unlock()
 	savePasswords()
 
-	// Extract metadata now that password is known
 	comicsMutex.Lock()
 	c = comics[decodedID]
 	extractCBZMetadata(&c)
-	// Organize comic based on extracted metadata
-if c.Artist != "Unknown" || c.StoryArc != "" {
-    inker := sanitizeFilename(c.Artist)
-    storyArc := sanitizeFilename(c.StoryArc)
-    if inker == "" {
-        inker = "Unknown"
-    }
-    if storyArc == "" {
-        storyArc = "No_StoryArc"
-    }
-    newDir := filepath.Join(libraryPath, inker, storyArc)
-    os.MkdirAll(newDir, 0755)
-    filename := filepath.Base(c.FilePath)
-    newPath := filepath.Join(newDir, filename)
-    if newPath != c.FilePath {
-        if err := os.Rename(c.FilePath, newPath); err == nil {
-            c.FilePath = newPath
-        } else {
-            log.Printf("Failed to move comic %s to %s: %v", c.ID, newPath, err)
-        }
-    }
-}
 
-// Update tags counts for newly extracted tags
-tagsMutex.Lock()
-for _, tag := range c.Tags {
-    if tagData, exists := tags[tag]; exists {
-        tagData.Count++
-        tags[tag] = tagData
-    } else {
-        tags[tag] = Tag{Name: tag, Color: "#1f6feb", Count: 1}
-    }
-}
-tagsMutex.Unlock()
-comics[decodedID] = c
-comicsMutex.Unlock()
+	if c.Artist != "Unknown" || c.StoryArc != "" {
+		inker := sanitizeFilename(c.Artist)
+		storyArc := sanitizeFilename(c.StoryArc)
+		if inker == "" {
+			inker = "Unknown"
+		}
+		if storyArc == "" {
+			storyArc = "No_StoryArc"
+		}
+		newDir := filepath.Join(libraryPath, inker, storyArc)
+		os.MkdirAll(newDir, 0755)
+		filename := filepath.Base(c.FilePath)
+		newPath := filepath.Join(newDir, filename)
+		if newPath != c.FilePath {
+			if err := os.Rename(c.FilePath, newPath); err == nil {
+				c.FilePath = newPath
+			}
+		}
+	}
+
+	tagsMutex.Lock()
+	for _, tag := range c.Tags {
+		if tagData, exists := tags[tag]; exists {
+			tagData.Count++
+			tags[tag] = tagData
+		} else {
+			tags[tag] = Tag{Name: tag, Color: "#1f6feb", Count: 1}
+		}
+	}
+	tagsMutex.Unlock()
+	comics[decodedID] = c
+	comicsMutex.Unlock()
 
 	saveComics()
 	saveTags()
@@ -766,13 +732,109 @@ comicsMutex.Unlock()
 	json.NewEncoder(w).Encode(map[string]string{"message": "Password set successfully"})
 }
 
+func handleBookmark(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/bookmark/"), "/")
+	if len(parts) == 0 {
+		http.Error(w, "Comic ID required", http.StatusBadRequest)
+		return
+	}
+
+	id := parts[0]
+	decodedID, err := url.QueryUnescape(id)
+	if err != nil {
+		decodedID = id
+	}
+
+	comicsMutex.Lock()
+	defer comicsMutex.Unlock()
+
+	comic, exists := comics[decodedID]
+	if !exists {
+		comic, exists = comics[id]
+		if !exists {
+			http.Error(w, "Comic not found", http.StatusNotFound)
+			return
+		}
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		var req struct {
+			Page int `json:"page"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
+
+		if comic.Bookmarks == nil {
+			comic.Bookmarks = []int{}
+		}
+
+		found := false
+		for _, p := range comic.Bookmarks {
+			if p == req.Page {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			comic.Bookmarks = append(comic.Bookmarks, req.Page)
+			sort.Ints(comic.Bookmarks)
+		}
+
+		comics[decodedID] = comic
+		saveComics()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message":   "Bookmark added",
+			"bookmarks": comic.Bookmarks,
+		})
+
+	case http.MethodDelete:
+		if len(parts) < 2 {
+			http.Error(w, "Page number required", http.StatusBadRequest)
+			return
+		}
+
+		var pageNum int
+		fmt.Sscanf(parts[1], "%d", &pageNum)
+
+		if comic.Bookmarks == nil {
+			comic.Bookmarks = []int{}
+		}
+
+		newBookmarks := []int{}
+		for _, p := range comic.Bookmarks {
+			if p != pageNum {
+				newBookmarks = append(newBookmarks, p)
+			}
+		}
+
+		comic.Bookmarks = newBookmarks
+		comics[decodedID] = comic
+		saveComics()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message":   "Bookmark removed",
+			"bookmarks": comic.Bookmarks,
+		})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func handleComicFile(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/comic/"), "/")
 	id := parts[0]
 
 	decodedID, err := url.QueryUnescape(id)
 	if err != nil {
-		log.Printf("Error decoding ID: %v", err)
 		decodedID = id
 	}
 
@@ -784,7 +846,6 @@ func handleComicFile(w http.ResponseWriter, r *http.Request) {
 	comicsMutex.RUnlock()
 
 	if !exists {
-		log.Printf("Comic file not found for ID: %s or %s", decodedID, id)
 		http.Error(w, "Comic not found", http.StatusNotFound)
 		return
 	}
@@ -809,7 +870,6 @@ func serveComicPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum
 
 	yr, err := yzip.OpenReader(comic.FilePath)
 	if err != nil {
-		log.Printf("Error opening CBZ with yeka/zip: %v", err)
 		serveComicPageStandard(w, r, comic, pageIdx)
 		return
 	}
@@ -821,7 +881,6 @@ func serveComicPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		// Broad image format support
 		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".avif" ||
 			ext == ".jxl" || ext == ".jp2" || ext == ".webp" || ext == ".gif" || ext == ".bmp" {
 			imageFiles = append(imageFiles, f)
@@ -839,27 +898,24 @@ func serveComicPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum
 
 	targetFile := imageFiles[pageIdx]
 
-	// Password handling
 	if targetFile.IsEncrypted() {
 		if comic.Password != "" {
 			targetFile.SetPassword(comic.Password)
 		} else {
-			http.Error(w, "Comic requires password (contact admin or re-open reader)", http.StatusUnauthorized)
+			http.Error(w, "Comic requires password", http.StatusUnauthorized)
 			return
 		}
 	}
 
 	rc, err := targetFile.Open()
 	if err != nil {
-		log.Printf("Error opening page file: %v", err)
-		http.Error(w, "Error reading page - file may be encrypted", http.StatusInternalServerError)
+		http.Error(w, "Error reading page", http.StatusInternalServerError)
 		return
 	}
 	defer rc.Close()
 
 	imageData, err := io.ReadAll(rc)
 	if err != nil {
-		log.Printf("Error reading image data: %v", err)
 		http.Error(w, "Error reading page", http.StatusInternalServerError)
 		return
 	}
@@ -886,7 +942,6 @@ func serveComicPageStandard(w http.ResponseWriter, r *http.Request, comic Comic,
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		// Broad image format support
 		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".avif" ||
 			ext == ".jxl" || ext == ".jp2" || ext == ".webp" || ext == ".gif" || ext == ".bmp" {
 			imageFiles = append(imageFiles, f)
@@ -955,7 +1010,6 @@ func extractCBZMetadataStandard(comic *Comic) {
 				comic.Year = info.Year
 				comic.PageCount = info.PageCount
 
-				// Extract tags from TagsXml first, then fallback to Genre
 				tagsSource := info.TagsXml
 				if tagsSource == "" {
 					tagsSource = info.Genre
@@ -1000,7 +1054,6 @@ func serveCoverFromCBZ(w http.ResponseWriter, r *http.Request, comic Comic) {
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		// FIX 2: Expanded image types for serving covers
 		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".avif" || ext == ".jxl" || ext == ".webp" || ext == ".bmp" || ext == ".jp2" {
 			imageFiles = append(imageFiles, f)
 		}
@@ -1017,20 +1070,18 @@ func serveCoverFromCBZ(w http.ResponseWriter, r *http.Request, comic Comic) {
 
 	coverFile := imageFiles[0]
 
-	// Password handling
 	if coverFile.IsEncrypted() {
 		if comic.Password != "" {
 			coverFile.SetPassword(comic.Password)
 		} else {
-			http.Error(w, "Comic requires password (contact admin or re-open reader)", http.StatusUnauthorized)
+			http.Error(w, "Comic requires password", http.StatusUnauthorized)
 			return
 		}
 	}
 
 	rc, err := coverFile.Open()
 	if err != nil {
-		log.Printf("Error opening cover for ID %s: %v", comic.ID, err)
-		http.Error(w, "Error reading cover - file may be encrypted", http.StatusInternalServerError)
+		http.Error(w, "Error reading cover", http.StatusInternalServerError)
 		return
 	}
 	defer rc.Close()
@@ -1173,17 +1224,17 @@ func processComic(filePath, filename string) Comic {
 		UploadedAt: time.Now(),
 		Artist:     "Unknown",
 		Tags:       []string{},
+		Bookmarks:  []int{},
 	}
 
 	if comic.FileType == ".cbz" {
 		extractCBZMetadata(&comic)
-		// Register extracted tags in global tags map
 		tagsMutex.Lock()
 		for _, tag := range comic.Tags {
 			if _, exists := tags[tag]; !exists {
 				tags[tag] = Tag{
 					Name:  tag,
-					Color: "#1f6feb", // Default color
+					Color: "#1f6feb",
 					Count: 0,
 				}
 			}
@@ -1194,7 +1245,6 @@ func processComic(filePath, filename string) Comic {
 		tagsMutex.Unlock()
 		saveTags()
 
-		// Create folder structure based on Inker and StoryArc
 		if comic.Artist != "Unknown" || comic.StoryArc != "" {
 			inker := sanitizeFilename(comic.Artist)
 			storyArc := sanitizeFilename(comic.StoryArc)
@@ -1247,7 +1297,6 @@ func generateCoverCache(comic *Comic) {
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		// FIX 2: Expanded image types for cover caching
 		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".avif" || ext == ".jxl" || ext == ".webp" || ext == ".bmp" || ext == ".jp2" {
 			imageFiles = append(imageFiles, f)
 		}
@@ -1263,19 +1312,16 @@ func generateCoverCache(comic *Comic) {
 
 	coverFile := imageFiles[0]
 
-	// Password handling
 	if coverFile.IsEncrypted() {
 		if comic.Password != "" {
 			coverFile.SetPassword(comic.Password)
 		} else {
-			log.Printf("Failed to open cover file for ID %s. File encrypted or corrupted.", comic.ID)
 			return
 		}
 	}
 
 	rc, err := coverFile.Open()
 	if err != nil {
-		log.Printf("Failed to open cover file for ID %s. File encrypted or corrupted. %v", comic.ID, err)
 		return
 	}
 	defer rc.Close()
@@ -1305,16 +1351,14 @@ func extractCBZMetadata(comic *Comic) {
 		}
 	}
 	comic.Encrypted = isEncrypted
-	comic.HasPassword = false // Default until proven
+	comic.HasPassword = false
 
 	if !isEncrypted {
-		// Use standard extraction if not encrypted
 		extractCBZMetadataStandard(comic)
-		comic.HasPassword = true // No password needed
+		comic.HasPassword = true
 		return
 	}
 
-	// Collect unique known passwords from other comics
 	passwordsMutex.RLock()
 	knownPwds := make(map[string]bool)
 	for _, pwd := range comicPasswords {
@@ -1331,7 +1375,6 @@ func extractCBZMetadata(comic *Comic) {
 			var readErr error
 
 			if len(knownPwds) > 0 {
-				// Try known passwords
 				for pwd := range knownPwds {
 					f.SetPassword(pwd)
 					rc, err := f.Open()
@@ -1351,7 +1394,6 @@ func extractCBZMetadata(comic *Comic) {
 			}
 
 			if foundPwd != "" {
-				// Success: persist
 				comic.Password = foundPwd
 				comic.HasPassword = true
 				passwordsMutex.Lock()
@@ -1359,7 +1401,6 @@ func extractCBZMetadata(comic *Comic) {
 				passwordsMutex.Unlock()
 				savePasswords()
 			} else if !isEncrypted {
-				// Fallback for non-encrypted
 				rc, err := f.Open()
 				if err != nil {
 					continue
@@ -1382,7 +1423,6 @@ func extractCBZMetadata(comic *Comic) {
 				comic.Year = info.Year
 				comic.PageCount = info.PageCount
 
-				// Extract tags from TagsXml first, then fallback to Genre
 				tagsSource := info.TagsXml
 				if tagsSource == "" {
 					tagsSource = info.Genre
@@ -1414,7 +1454,6 @@ func extractCBZMetadata(comic *Comic) {
 }
 
 func scanLibrary() {
-	// Create a map to track existing file paths for quick lookup
 	comicsMutex.RLock()
 	existingPaths := make(map[string]string)
 	for id, comic := range comics {
@@ -1437,45 +1476,39 @@ func scanLibrary() {
 		comicsMutex.RUnlock()
 
 		if exists {
-			// Verify cache exists for this comic
 			comic := comics[id]
 			cacheFile := filepath.Join(cachePath, comic.ID+".jpg")
 			if _, err := os.Stat(cacheFile); os.IsNotExist(err) && comic.FileType == ".cbz" {
-				// Generate cache only if it doesn't exist
 				comicsMutex.RLock()
 				c := comics[id]
 				comicsMutex.RUnlock()
 				generateCoverCache(&c)
 				comicsMutex.Lock()
-				comics[id] = c // Update with any new password found
+				comics[id] = c
 				comicsMutex.Unlock()
 			}
 			return nil
 		}
 
-		// Process new comic
 		comic := processComic(path, info.Name())
 		comicsMutex.Lock()
 		comics[comic.ID] = comic
 		comicsMutex.Unlock()
 
-		// Generate cover cache for new comic
 		comicsMutex.RLock()
 		c := comics[comic.ID]
 		comicsMutex.RUnlock()
 		generateCoverCache(&c)
 		comicsMutex.Lock()
-		comics[comic.ID] = c // Write back potential password found
+		comics[comic.ID] = c
 		comicsMutex.Unlock()
 
 		return nil
 	})
 
-	// Clean up comics that no longer exist
 	comicsMutex.Lock()
 	for id, comic := range comics {
 		if _, err := os.Stat(comic.FilePath); os.IsNotExist(err) {
-			// Remove tags associated with this comic
 			for _, tag := range comic.Tags {
 				updateTagCount(tag, -1)
 			}
@@ -1509,27 +1542,22 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// Replace loadUsers():
 func loadUsers() {
-    data, err := os.ReadFile("etc/users.json")
-    if err != nil {
-        log.Printf("Error reading users.json: %v", err)
-        return
-    }
-    if err := json.Unmarshal(data, &users); err != nil {
-        log.Printf("Error unmarshaling users: %v", err)
-    }
+	data, err := os.ReadFile("etc/users.json")
+	if err != nil {
+		return
+	}
+	if err := json.Unmarshal(data, &users); err != nil {
+		log.Printf("Error unmarshaling users: %v", err)
+	}
 
-    // Always load admin config to set registrationEnabled
-    adminData, err := os.ReadFile("etc/admin.json")
-    if err == nil && len(adminData) > 0 {
-        var adminConfig struct{ RegistrationEnabled bool }
-        if err := json.Unmarshal(adminData, &adminConfig); err == nil {
-            registrationEnabled = adminConfig.RegistrationEnabled
-        } else {
-            log.Printf("Error unmarshaling admin.json: %v", err)
-        }
-    }
+	adminData, err := os.ReadFile("etc/admin.json")
+	if err == nil && len(adminData) > 0 {
+		var adminConfig struct{ RegistrationEnabled bool }
+		if err := json.Unmarshal(adminData, &adminConfig); err == nil {
+			registrationEnabled = adminConfig.RegistrationEnabled
+		}
+	}
 }
 
 func saveUsers() {
@@ -1537,11 +1565,10 @@ func saveUsers() {
 	os.WriteFile("etc/users.json", data, 0644)
 }
 
-// Add new function after saveUsers():
 func saveAdminConfig() {
-    config := struct{ RegistrationEnabled bool }{RegistrationEnabled: registrationEnabled}
-    data, _ := json.MarshalIndent(config, "", "  ")
-    os.WriteFile("etc/admin.json", data, 0644)
+	config := struct{ RegistrationEnabled bool }{RegistrationEnabled: registrationEnabled}
+	data, _ := json.MarshalIndent(config, "", "  ")
+	os.WriteFile("etc/admin.json", data, 0644)
 }
 
 func loadTags() {
@@ -1577,31 +1604,26 @@ func loadComics() {
 func loadPasswordsWithKey(key []byte) {
 	data, err := os.ReadFile(filepath.Join(libraryPath, "passwords.json"))
 	if err != nil {
-		log.Printf("No passwords file for user %s, starting fresh", currentUser)
 		return
 	}
 
 	b64data := strings.TrimSpace(string(data))
 	encrypted, err := base64.StdEncoding.DecodeString(b64data)
 	if err != nil {
-		log.Printf("Failed to decode passwords.json: %v", err)
 		return
 	}
 
 	decrypted, err := decryptAES(encrypted, key)
 	if err != nil {
-		log.Printf("Failed to decrypt passwords: %v", err)
 		return
 	}
 
 	passwordsMutex.Lock()
 	defer passwordsMutex.Unlock()
 	if err := json.Unmarshal(decrypted, &comicPasswords); err != nil {
-		log.Printf("Failed to unmarshal passwords: %v", err)
 		return
 	}
 
-	// Restore Password and HasPassword in comics map
 	comicsMutex.Lock()
 	defer comicsMutex.Unlock()
 	for id, pwd := range comicPasswords {
@@ -1615,7 +1637,6 @@ func loadPasswordsWithKey(key []byte) {
 
 func savePasswords() {
 	if len(currentEncryptionKey) == 0 {
-		log.Println("No encryption key set, skipping save")
 		return
 	}
 
@@ -1623,20 +1644,16 @@ func savePasswords() {
 	defer passwordsMutex.Unlock()
 	data, err := json.MarshalIndent(comicPasswords, "", "  ")
 	if err != nil {
-		log.Printf("Failed to marshal passwords: %v", err)
 		return
 	}
 
 	encrypted, err := encryptAES(data, currentEncryptionKey)
 	if err != nil {
-		log.Printf("Failed to encrypt passwords: %v", err)
 		return
 	}
 
 	b64 := base64.StdEncoding.EncodeToString(encrypted)
-	if err := os.WriteFile(filepath.Join(libraryPath, "passwords.json"), []byte(b64), 0644); err != nil {
-		log.Printf("Failed to write passwords.json for user %s: %v", currentUser, err)
-	}
+	os.WriteFile(filepath.Join(libraryPath, "passwords.json"), []byte(b64), 0644)
 }
 
 func updateTagCount(tagName string, delta int) {
@@ -1659,12 +1676,9 @@ func generateToken() string {
 }
 
 func sanitizeFilename(filename string) string {
-	// Replace spaces explicitly with underscores
 	filename = strings.ReplaceAll(filename, " ", "_")
-	// Replace any character that isn't alphanumeric, hyphen, or underscore with underscore
 	reg, _ := regexp.Compile("[^a-zA-Z0-9-_]+")
 	sanitized := reg.ReplaceAllString(filename, "_")
-	// Remove leading/trailing underscores
 	sanitized = strings.Trim(sanitized, "_")
 	if sanitized == "" {
 		return "Unknown"
@@ -1698,31 +1712,6 @@ func deriveKey(seed string) []byte {
 	return hash[:32]
 }
 
-func isPlaintext(data []byte) bool {
-	if len(data) < 4 {
-		return true
-	}
-
-	if len(data) >= 4 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 {
-		return true
-	}
-	if len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
-		return true
-	}
-	if len(data) >= 3 && data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46 {
-		return true
-	}
-	if len(data) >= 12 && data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 &&
-		data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50 {
-		return true
-	}
-	if data[0] == 0x3C {
-		return true
-	}
-
-	return false
-}
-
 func decryptAES(data []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -1748,20 +1737,16 @@ func encryptAES(plaintext []byte, key []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// Generate random IV
 	iv := make([]byte, aes.BlockSize)
 	if _, err := rand.Read(iv); err != nil {
 		return nil, err
 	}
 
-	// Create the cipher stream
 	stream := cipher.NewCFBEncrypter(block, iv)
 
-	// Encrypt the plaintext
 	ciphertext := make([]byte, len(plaintext))
 	stream.XORKeyStream(ciphertext, plaintext)
 
-	// Prepend IV to ciphertext
 	return append(iv, ciphertext...), nil
 }
 
@@ -1892,7 +1877,7 @@ func getHTML() string {
             margin-bottom: 30px;
         }
 
-        .filter-section {
+	.filter-section {
             background: #1b1e2c;
             border: 1px solid #446B6E;
             border-radius: 6px;
@@ -2103,6 +2088,83 @@ func getHTML() string {
             display: flex;
             gap: 10px;
             align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .bookmark-indicator {
+            color: #f0883e;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .bookmark-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #f0883e;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+            z-index: 10;
+        }
+
+        .bookmark-list {
+            position: absolute;
+            bottom: 70px;
+            left: 20px;
+            background: rgba(22, 27, 34, 0.95);
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            min-width: 200px;
+            z-index: 100;
+        }
+
+        .bookmark-list-title {
+            color: #f0883e;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .bookmark-list-item {
+            padding: 6px 8px;
+            background: #21262d;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            margin-bottom: 4px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }
+
+        .bookmark-list-item:hover {
+            background: #30363d;
+        }
+
+        .bookmark-list-item.current {
+            border-color: #f0883e;
+            background: rgba(240, 136, 62, 0.1);
+        }
+
+        .bookmark-delete {
+            color: #da3633;
+            cursor: pointer;
+            padding: 0 4px;
+            font-size: 16px;
+        }
+
+        .bookmark-delete:hover {
+            color: #ff5555;
         }
 
         .reader-btn {
@@ -2312,92 +2374,93 @@ func getHTML() string {
         .context-menu-item:hover {
             background: #21262d;
         }
-	#passwordModal {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.9);
-    z-index: 2500;
-    align-items: center;
-    justify-content: center;
-}
 
-#passwordModal.active {
-    display: flex;
-}
+        #passwordModal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 2500;
+            align-items: center;
+            justify-content: center;
+        }
 
-.password-modal-content {
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 30px;
-    max-width: 400px;
-    width: 90%;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-}
+        #passwordModal.active {
+            display: flex;
+        }
 
-.password-modal-header {
-    margin-bottom: 20px;
-}
+        .password-modal-content {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 30px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+        }
 
-.password-modal-title {
-    color: #58a6ff;
-    font-size: 18px;
-    font-weight: 600;
-    margin-bottom: 8px;
-}
+        .password-modal-header {
+            margin-bottom: 20px;
+        }
 
-.password-modal-subtitle {
-    color: #8b949e;
-    font-size: 14px;
-}
+        .password-modal-title {
+            color: #58a6ff;
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
 
-.password-input-group {
-    margin-bottom: 20px;
-}
+        .password-modal-subtitle {
+            color: #8b949e;
+            font-size: 14px;
+        }
 
-.password-input-group label {
-    display: block;
-    margin-bottom: 8px;
-    color: #c9d1d9;
-    font-weight: 500;
-}
+        .password-input-group {
+            margin-bottom: 20px;
+        }
 
-.password-input-group input {
-    width: 100%;
-    padding: 10px 12px;
-    background: #0d1117;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    color: #c9d1d9;
-    font-size: 14px;
-}
+        .password-input-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #c9d1d9;
+            font-weight: 500;
+        }
 
-.password-input-group input:focus {
-    outline: none;
-    border-color: #58a6ff;
-}
+        .password-input-group input {
+            width: 100%;
+            padding: 10px 12px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #c9d1d9;
+            font-size: 14px;
+        }
 
-.password-modal-buttons {
-    display: flex;
-    gap: 10px;
-}
+        .password-input-group input:focus {
+            outline: none;
+            border-color: #58a6ff;
+        }
 
-.password-modal-buttons button {
-    flex: 1;
-}
+        .password-modal-buttons {
+            display: flex;
+            gap: 10px;
+        }
 
-.password-error {
-    background: #da3633;
-    color: white;
-    padding: 10px;
-    border-radius: 6px;
-    margin-bottom: 16px;
-    font-size: 13px;
-}
+        .password-modal-buttons button {
+            flex: 1;
+        }
+
+        .password-error {
+            background: #da3633;
+            color: white;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-size: 13px;
+        }
     </style>
 </head>
 <body>
@@ -2411,9 +2474,9 @@ func getHTML() string {
     </header>
 
     <div class="container">
-	<div id="authSection" class="auth-section">
-	    <div id="authMessage" class="message hidden"></div>  <!-- NEW: Auth-specific message -->
-	    <div class="tabs">
+        <div id="authSection" class="auth-section">
+            <div id="authMessage" class="message hidden"></div>
+            <div class="tabs">
                 <button class="tab active" onclick="showTab('login')">Login</button>
                 <button class="tab" onclick="showTab('register')">Register</button>
             </div>
@@ -2455,31 +2518,31 @@ func getHTML() string {
                 <button onclick="uploadComic()">Upload</button>
             </div>
 
-	    <div class="filter-section">
-    <h3 style="margin-bottom: 12px; color: #c9d1d9; font-size: 16px;">Filter by Tags</h3>
-    <div class="filter-controls">
-        <div style="position: relative; width: 300px;">
-            <input type="text" id="tagSearch" placeholder="Search tags..." style="width: 100%; padding-right: 30px;">
-            <span style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: #8b949e;">🔍</span>
-        </div>
-        <div id="tagSuggestions" class="context-menu hidden" style="width: 300px; max-height: 200px; overflow-y: auto;"></div>
-        <div id="selectedTagFilters" class="filter-controls" style="flex-wrap: wrap; gap: 8px; margin-top: 10px;"></div>
-    </div>
-		</div>
+            <div class="filter-section">
+                <h3 style="margin-bottom: 12px; color: #c9d1d9; font-size: 16px;">Filter by Tags</h3>
+                <div class="filter-controls">
+                    <div style="position: relative; width: 300px;">
+                        <input type="text" id="tagSearch" placeholder="Search tags..." style="width: 100%; padding-right: 30px;">
+                        <span style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: #8b949e;">🔍</span>
+                    </div>
+                    <div id="tagSuggestions" class="context-menu hidden" style="width: 300px; max-height: 200px; overflow-y: auto;"></div>
+                    <div id="selectedTagFilters" class="filter-controls" style="flex-wrap: wrap; gap: 8px; margin-top: 10px;"></div>
+                </div>
+            </div>
 
             <h2 style="margin-bottom: 20px; color: #c9d1d9;">Library</h2>
-		<div id="adminPanel" class="upload-section hidden">
-		    <h2>Admin Panel</h2>
-		    <div class="form-group">
-			<label>Registration: <span id="regStatus">Enabled</span></label>
-			<button onclick="toggleRegistration()" class="secondary-btn">Toggle</button>
-		    </div>
-		    <div class="form-group">
-			<label>Delete Comic ID:</label>
-			<input type="text" id="deleteId" placeholder="Enter comic ID">
-			<button onclick="deleteComic()" class="secondary-btn">Delete</button>
-		    </div>
-		</div>
+            <div id="adminPanel" class="upload-section hidden">
+                <h2>Admin Panel</h2>
+                <div class="form-group">
+                    <label>Registration: <span id="regStatus">Enabled</span></label>
+                    <button onclick="toggleRegistration()" class="secondary-btn">Toggle</button>
+                </div>
+                <div class="form-group">
+                    <label>Delete Comic ID:</label>
+                    <input type="text" id="deleteId" placeholder="Enter comic ID">
+                    <button onclick="deleteComic()" class="secondary-btn">Delete</button>
+                </div>
+            </div>
             <div id="comicsGrid" class="comics-grid"></div>
         </div>
     </div>
@@ -2493,10 +2556,20 @@ func getHTML() string {
                 <span style="color: #8b949e;"> / <span id="totalPages">0</span></span>
                 <button class="reader-btn" onclick="nextPage()" id="nextBtn">Next →</button>
                 <button class="reader-btn" onclick="toggleFitMode()">Fit: <span id="fitMode">Width</span></button>
+                <div class="bookmark-indicator" id="bookmarkIndicator" style="display: none;">
+                    <span>🔖</span>
+                    <span id="bookmarkText">Bookmarked</span>
+                </div>
+                <button class="reader-btn" onclick="toggleBookmark()" id="bookmarkBtn">🔖 Bookmark Page</button>
+                <button class="reader-btn" onclick="toggleBookmarkList()" id="bookmarkListBtn">📚 Bookmarks (<span id="bookmarkCount">0</span>)</button>
                 <button class="reader-btn" onclick="closeReader()">Close</button>
             </div>
         </div>
         <div class="reader-content" id="readerContent">
+            <div id="bookmarkList" class="bookmark-list" style="display: none;">
+                <div class="bookmark-list-title">Bookmarked Pages</div>
+                <div id="bookmarkListItems"></div>
+            </div>
             <img id="comicImage" alt="Comic page">
             <div class="zoom-controls">
                 <button class="zoom-btn" onclick="zoomOut()">−</button>
@@ -2532,25 +2605,25 @@ func getHTML() string {
     </div>
 
     <div id="passwordModal">
-    <div class="password-modal-content">
-        <div class="password-modal-header">
-            <div class="password-modal-title">🔒 Password Required</div>
-            <div class="password-modal-subtitle" id="passwordComicTitle">This comic is encrypted</div>
-        </div>
+        <div class="password-modal-content">
+            <div class="password-modal-header">
+                <div class="password-modal-title">🔒 Password Required</div>
+                <div class="password-modal-subtitle" id="passwordComicTitle">This comic is encrypted</div>
+            </div>
 
-        <div id="passwordError" class="password-error hidden"></div>
+            <div id="passwordError" class="password-error hidden"></div>
 
-        <div class="password-input-group">
-            <label>Enter Password</label>
-            <input type="password" id="passwordInput" placeholder="Enter password">
-        </div>
+            <div class="password-input-group">
+                <label>Enter Password</label>
+                <input type="password" id="passwordInput" placeholder="Enter password">
+            </div>
 
-        <div class="password-modal-buttons">
-            <button onclick="cancelPassword()" class="secondary-btn">Cancel</button>
-            <button onclick="submitPassword()">Unlock</button>
+            <div class="password-modal-buttons">
+                <button onclick="cancelPassword()" class="secondary-btn">Cancel</button>
+                <button onclick="submitPassword()">Unlock</button>
+            </div>
         </div>
     </div>
-</div>
 
     <div id="contextMenu" class="context-menu hidden"></div>
 
@@ -2621,8 +2694,8 @@ func getHTML() string {
 
             if (res.ok) {
                 const data = await res.json();
-                window.isAdmin = data.is_admin || false; // Ensure is_admin is defined
-                window.registrationEnabled = true; // Default value
+                window.isAdmin = data.is_admin || false;
+                window.registrationEnabled = true;
                 document.getElementById('authSection').classList.add('hidden');
                 document.getElementById('mainSection').classList.remove('hidden');
                 document.getElementById('userInfo').classList.remove('hidden');
@@ -2634,13 +2707,9 @@ func getHTML() string {
                             const adminData = await adminRes.json();
                             window.registrationEnabled = adminData.enabled;
                             document.getElementById('regStatus').textContent = adminData.enabled ? 'Enabled' : 'Disabled';
-                        } else {
-                            console.error('Failed to fetch registration status:', await adminRes.text());
-                            showMessage('Failed to load admin settings', 'error');
                         }
                     } catch (err) {
                         console.error('Error fetching admin settings:', err);
-                        showMessage('Error loading admin settings', 'error');
                     }
                 }
 
@@ -2828,6 +2897,13 @@ func getHTML() string {
             fallback.textContent = 'COVER NOT AVAILABLE';
             fallback.style.background = '#21262d';
 
+            if (comic.bookmarks && comic.bookmarks.length > 0) {
+                const badge = document.createElement('div');
+                badge.className = 'bookmark-badge';
+                badge.textContent = '🔖 ' + comic.bookmarks.length + ' bookmark' + (comic.bookmarks.length > 1 ? 's' : '');
+                coverContainer.appendChild(badge);
+            }
+
             cover.onerror = function() {
                 cover.classList.add('hidden');
                 fallback.classList.remove('hidden');
@@ -2862,13 +2938,17 @@ func getHTML() string {
             info.innerHTML =
                 '<div class="comic-title">' + (comic.title || comic.filename) + '</div>' +
                 '<div class="comic-meta">' + metaHTML + '</div>' +
-                '<span class="comic-artist' + artistClass + '">' + comic.artist + '</span>' +
+                '<span class="comic-artist ' + artistClass + '">' + comic.artist + '</span>' +
                 tagsHTML;
 
             card.appendChild(info);
 
             card.onclick = function(e) {
                 if (e.target.classList.contains('comic-tag')) {
+                    return;
+                }
+                if (e.target.classList.contains('bookmark-badge') && comic.bookmarks && comic.bookmarks.length > 0) {
+                    openReaderAtBookmark(comic, comic.bookmarks[0]);
                     return;
                 }
                 openReader(comic);
@@ -2887,6 +2967,11 @@ func getHTML() string {
         const menu = document.getElementById('contextMenu');
         menu.className = 'context-menu';
         menu.innerHTML = '<div class="context-menu-item" onclick="openTagModal(\'' + comic.id + '\')">Manage Tags</div>';
+
+        if (comic.bookmarks && comic.bookmarks.length > 0) {
+            menu.innerHTML += '<div class="context-menu-item" onclick="openReaderAtBookmark(comics.find(c => c.id === \'' + comic.id + '\'), ' + comic.bookmarks[0] + ')">Go to First Bookmark (Page ' + (comic.bookmarks[0] + 1) + ')</div>';
+        }
+
         menu.style.left = e.pageX + 'px';
         menu.style.top = e.pageY + 'px';
 
@@ -3027,10 +3112,10 @@ func getHTML() string {
         document.getElementById('readerTitle').textContent = comic.title || comic.filename;
         document.getElementById('readerModal').classList.add('active');
 
-	if (comic.encrypted && !comic.has_password) {
-		await showPasswordModal(comic);
-		return;
-	}
+        if (comic.encrypted && !comic.has_password) {
+            await showPasswordModal(comic);
+            return;
+        }
 
         const encodedId = encodeURIComponent(currentComic.id);
         const url = '/api/pages/' + encodedId;
@@ -3051,6 +3136,51 @@ func getHTML() string {
 
                 if (totalPages > 0) {
                     loadPage(0);
+                    updateBookmarkUI();
+                } else {
+                    showMessage('No pages found in comic', 'error');
+                }
+            } else {
+                const error = await res.text();
+                showMessage('Error loading comic: ' + error, 'error');
+            }
+        } catch (err) {
+            showMessage('Error: ' + err.message, 'error');
+        }
+    }
+
+    async function openReaderAtBookmark(comic, bookmarkPage) {
+        currentComic = comic;
+        currentPage = bookmarkPage || 0;
+
+        document.getElementById('readerTitle').textContent = comic.title || comic.filename;
+        document.getElementById('readerModal').classList.add('active');
+
+        if (comic.encrypted && !comic.has_password) {
+            await showPasswordModal(comic);
+            return;
+        }
+
+        const encodedId = encodeURIComponent(currentComic.id);
+        const url = '/api/pages/' + encodedId;
+
+        try {
+            const res = await fetch(url);
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.needs_password) {
+                    alert('Password required but not set. Please re-open the comic.');
+                    closeReader();
+                    return;
+                }
+                totalPages = data.page_count;
+                document.getElementById('totalPages').textContent = totalPages;
+                document.getElementById('pageInput').max = totalPages;
+
+                if (totalPages > 0) {
+                    loadPage(currentPage);
+                    updateBookmarkUI();
                 } else {
                     showMessage('No pages found in comic', 'error');
                 }
@@ -3065,6 +3195,7 @@ func getHTML() string {
 
     function closeReader() {
         document.getElementById('readerModal').classList.remove('active');
+        document.getElementById('bookmarkList').style.display = 'none';
         currentComic = null;
     }
 
@@ -3087,7 +3218,122 @@ func getHTML() string {
         document.getElementById('prevBtn').disabled = currentPage === 0;
         document.getElementById('nextBtn').disabled = currentPage === totalPages - 1;
 
+        updateBookmarkUI();
         resetZoom();
+    }
+
+    function updateBookmarkUI() {
+        if (!currentComic.bookmarks) {
+            currentComic.bookmarks = [];
+        }
+
+        const isBookmarked = currentComic.bookmarks.includes(currentPage);
+        const btn = document.getElementById('bookmarkBtn');
+        const indicator = document.getElementById('bookmarkIndicator');
+        const count = document.getElementById('bookmarkCount');
+
+        btn.textContent = isBookmarked ? '🔖 Remove Bookmark' : '🔖 Bookmark Page';
+        count.textContent = currentComic.bookmarks.length;
+
+        if (isBookmarked) {
+            indicator.style.display = 'flex';
+            document.getElementById('bookmarkText').textContent = 'Current page bookmarked';
+        } else {
+            indicator.style.display = 'none';
+        }
+
+        renderBookmarkList();
+    }
+
+    function toggleBookmarkList() {
+        const list = document.getElementById('bookmarkList');
+        list.style.display = list.style.display === 'none' ? 'block' : 'none';
+    }
+
+    function renderBookmarkList() {
+        const container = document.getElementById('bookmarkListItems');
+        container.innerHTML = '';
+
+        if (!currentComic.bookmarks || currentComic.bookmarks.length === 0) {
+            container.innerHTML = '<div style="color: #8b949e; font-size: 12px; padding: 8px;">No bookmarks</div>';
+            return;
+        }
+
+        currentComic.bookmarks.forEach(page => {
+            const item = document.createElement('div');
+            item.className = 'bookmark-list-item' + (page === currentPage ? ' current' : '');
+
+            const pageText = document.createElement('span');
+            pageText.textContent = 'Page ' + (page + 1);
+            pageText.style.flex = '1';
+            pageText.onclick = function() {
+                loadPage(page);
+                document.getElementById('bookmarkList').style.display = 'none';
+            };
+
+            const deleteBtn = document.createElement('span');
+            deleteBtn.className = 'bookmark-delete';
+            deleteBtn.textContent = '×';
+            deleteBtn.onclick = function(e) {
+                e.stopPropagation();
+                removeBookmark(page);
+            };
+
+            item.appendChild(pageText);
+            item.appendChild(deleteBtn);
+            container.appendChild(item);
+        });
+    }
+
+    async function toggleBookmark() {
+        const isBookmarked = currentComic.bookmarks && currentComic.bookmarks.includes(currentPage);
+
+        if (isBookmarked) {
+            await removeBookmark(currentPage);
+        } else {
+            await addBookmark(currentPage);
+        }
+    }
+
+    async function addBookmark(page) {
+        const res = await fetch('/api/bookmark/' + encodeURIComponent(currentComic.id), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({page: page})
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            currentComic.bookmarks = data.bookmarks;
+            const idx = comics.findIndex(c => c.id === currentComic.id);
+            if (idx >= 0) {
+                comics[idx].bookmarks = data.bookmarks;
+            }
+            updateBookmarkUI();
+            showMessage('Bookmark added!', 'success');
+        } else {
+            showMessage('Failed to add bookmark', 'error');
+        }
+    }
+
+    async function removeBookmark(page) {
+        const res = await fetch('/api/bookmark/' + encodeURIComponent(currentComic.id) + '/' + page, {
+            method: 'DELETE'
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            currentComic.bookmarks = data.bookmarks;
+            const idx = comics.findIndex(c => c.id === currentComic.id);
+            if (idx >= 0) {
+                comics[idx].bookmarks = data.bookmarks;
+            }
+            updateBookmarkUI();
+            showMessage('Bookmark removed!', 'success');
+            loadComics();
+        } else {
+            showMessage('Failed to remove bookmark', 'error');
+        }
     }
 
     function nextPage() {
@@ -3156,16 +3402,16 @@ func getHTML() string {
     }
 
     document.addEventListener('keydown', function(e) {
-	if (document.getElementById('passwordModal').classList.contains('active')) {
-	    if (e.key === 'Enter') {
-		submitPassword();
-		return;
-	    }
-	    if (e.key === 'Escape') {
-		cancelPassword();
-		return;
-	    }
-	}
+        if (document.getElementById('passwordModal').classList.contains('active')) {
+            if (e.key === 'Enter') {
+                submitPassword();
+                return;
+            }
+            if (e.key === 'Escape') {
+                cancelPassword();
+                return;
+            }
+        }
         if (!currentComic) return;
 
         if (e.key === 'ArrowRight' || e.key === 'd') nextPage();
@@ -3224,92 +3470,91 @@ func getHTML() string {
             showMessage('Network error: ' + err.message, 'error');
         }
     }
+
     let pendingPasswordComic = null;
 
-async function showPasswordModal(comic) {
-    pendingPasswordComic = comic;
-    document.getElementById('passwordComicTitle').textContent = comic.title || comic.filename;
-    document.getElementById('passwordInput').value = '';
-    document.getElementById('passwordError').className = 'password-error hidden';
-    document.getElementById('passwordModal').classList.add('active');
-    document.getElementById('passwordInput').focus();
-}
-
-function cancelPassword() {
-    document.getElementById('passwordModal').classList.remove('active');
-    document.getElementById('readerModal').classList.remove('active');
-    pendingPasswordComic = null;
-}
-
-async function submitPassword() {
-    const pwd = document.getElementById('passwordInput').value;
-    if (!pwd) {
-        showPasswordError('Please enter a password');
-        return;
-    }
-
-    const res = await fetch("/api/set-password/" + encodeURIComponent(pendingPasswordComic.id), {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({password: pwd})
-    });
-
-    if (!res.ok) {
-        showPasswordError('Invalid password. Please try again.');
+    async function showPasswordModal(comic) {
+        pendingPasswordComic = comic;
+        document.getElementById('passwordComicTitle').textContent = comic.title || comic.filename;
         document.getElementById('passwordInput').value = '';
+        document.getElementById('passwordError').className = 'password-error hidden';
+        document.getElementById('passwordModal').classList.add('active');
         document.getElementById('passwordInput').focus();
-        return;
     }
 
-    document.getElementById('passwordModal').classList.remove('active');
-    await loadComics();
-    await loadTags();
-    currentComic = comics.find(c => c.id === pendingPasswordComic.id);
-    pendingPasswordComic = null;
+    function cancelPassword() {
+        document.getElementById('passwordModal').classList.remove('active');
+        document.getElementById('readerModal').classList.remove('active');
+        pendingPasswordComic = null;
+    }
 
-    // Continue opening the reader
-    continueOpenReader();
-}
-
-function showPasswordError(message) {
-    const errorDiv = document.getElementById('passwordError');
-    errorDiv.textContent = message;
-    errorDiv.className = 'password-error';
-}
-
-async function continueOpenReader() {
-    const encodedId = encodeURIComponent(currentComic.id);
-    const url = '/api/pages/' + encodedId;
-
-    try {
-        const res = await fetch(url);
-
-        if (res.ok) {
-            const data = await res.json();
-            if (data.needs_password) {
-                alert('Password required but not set. Please re-open the comic.');
-                closeReader();
-                return;
-            }
-            totalPages = data.page_count;
-            document.getElementById('totalPages').textContent = totalPages;
-            document.getElementById('pageInput').max = totalPages;
-
-            if (totalPages > 0) {
-                loadPage(0);
-            } else {
-                showMessage('No pages found in comic', 'error');
-            }
-        } else {
-            const error = await res.text();
-            showMessage('Error loading comic: ' + error, 'error');
+    async function submitPassword() {
+        const pwd = document.getElementById('passwordInput').value;
+        if (!pwd) {
+            showPasswordError('Please enter a password');
+            return;
         }
-    } catch (err) {
-        showMessage('Error: ' + err.message, 'error');
-    }
-}
 
-    // Initial check for logged-in user
+        const res = await fetch("/api/set-password/" + encodeURIComponent(pendingPasswordComic.id), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({password: pwd})
+        });
+
+        if (!res.ok) {
+            showPasswordError('Invalid password. Please try again.');
+            document.getElementById('passwordInput').value = '';
+            document.getElementById('passwordInput').focus();
+            return;
+        }
+
+        document.getElementById('passwordModal').classList.remove('active');
+        await loadComics();
+        await loadTags();
+        currentComic = comics.find(c => c.id === pendingPasswordComic.id);
+        pendingPasswordComic = null;
+
+        continueOpenReader();
+    }
+
+    function showPasswordError(message) {
+        const errorDiv = document.getElementById('passwordError');
+        errorDiv.textContent = message;
+        errorDiv.className = 'password-error';
+    }
+
+    async function continueOpenReader() {
+        const encodedId = encodeURIComponent(currentComic.id);
+        const url = '/api/pages/' + encodedId;
+
+        try {
+            const res = await fetch(url);
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.needs_password) {
+                    alert('Password required but not set. Please re-open the comic.');
+                    closeReader();
+                    return;
+                }
+                totalPages = data.page_count;
+                document.getElementById('totalPages').textContent = totalPages;
+                document.getElementById('pageInput').max = totalPages;
+
+                if (totalPages > 0) {
+                    loadPage(0);
+                } else {
+                    showMessage('No pages found in comic', 'error');
+                }
+            } else {
+                const error = await res.text();
+                showMessage('Error loading comic: ' + error, 'error');
+            }
+        } catch (err) {
+            showMessage('Error: ' + err.message, 'error');
+        }
+    }
+
     fetch('/api/comics')
         .then(function(res) {
             if (res.ok) {
@@ -3322,7 +3567,7 @@ async function continueOpenReader() {
         .catch(function(err) {
             console.error('Initial comics fetch failed:', err);
         });
-</script>
+    </script>
 </body>
 </html>`
 }
