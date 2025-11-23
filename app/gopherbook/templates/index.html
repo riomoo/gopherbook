@@ -1797,18 +1797,44 @@
         }
     }
 
-    fetch('/api/comics')
-        .then(function(res) {
-            if (res.ok) {
-                document.getElementById('authSection').classList.add('hidden');
-                document.getElementById('mainSection').classList.remove('hidden');
-                document.getElementById('userInfo').classList.remove('hidden');
-                loadTags().then(loadComics);
+    fetch('/api/user')
+    .then(function(res) {
+        if (res.ok) {
+            return res.json();
+        }
+    })
+    .then(function(data) {
+        if (data) {
+            window.isAdmin = data.is_admin || false;
+            if (window.isAdmin) {
+                fetch('/api/admin/toggle-registration')
+                    .then(function(adminRes) {
+                        if (adminRes.ok) return adminRes.json();
+                    })
+                    .then(function(adminData) {
+                        if (adminData) {
+                            window.registrationEnabled = adminData.enabled;
+                        }
+                    });
             }
-        })
-        .catch(function(err) {
-            console.error('Initial comics fetch failed:', err);
-        });
+        }
+    })
+    .catch(function(err) {
+        console.error('User fetch failed:', err);
+    });
+
+    fetch('/api/comics')
+    .then(function(res) {
+        if (res.ok) {
+            document.getElementById('authSection').classList.add('hidden');
+            document.getElementById('mainSection').classList.remove('hidden');
+            document.getElementById('userInfo').classList.remove('hidden');
+            loadTags().then(loadComics);
+        }
+    })
+    .catch(function(err) {
+        console.error('Initial comics fetch failed:', err);
+    });
     </script>
 </body>
 </html>

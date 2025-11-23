@@ -118,6 +118,7 @@ func main() {
 	http.HandleFunc("/api/logout", handleLogout)
 	http.HandleFunc("/api/comics", authMiddleware(handleComics))
 	http.HandleFunc("/api/upload", authMiddleware(handleUpload))
+	http.HandleFunc("/api/user", authMiddleware(handleUser))
 	http.HandleFunc("/api/organize", authMiddleware(handleOrganize))
 	http.HandleFunc("/api/pages/", authMiddleware(handleComicPages))
 	http.HandleFunc("/api/comic/", authMiddleware(handleComicFile))
@@ -207,6 +208,21 @@ func handleToggleRegistration(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"enabled": registrationEnabled})
+}
+
+func handleUser(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user := getCurrentUser(r)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"username": user.Username,
+		"is_admin": user.IsAdmin,
+	})
 }
 
 func getCurrentUser(r *http.Request) User {
