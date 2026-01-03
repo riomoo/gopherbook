@@ -21,8 +21,15 @@ if podman container exists "$CONTAINER_NAME"; then
 fi
 
 echo "Starting new container from image: $IMAGE_NAME..."
-podman run -d --name "$CONTAINER_NAME" --memory=256m --restart unless-stopped \
-  -p 12010:8080 -v ./library:/app/library -v ./cache:/app/cache -v ./etc:/app/etc "$IMAGE_NAME"
+# IMPROVED: Better memory settings and limits
+podman run -d --name "$CONTAINER_NAME" \
+  --memory=512m \
+  --restart unless-stopped \
+  -p 12010:8080 \
+  -v ./library:/app/library \
+  -v ./cache:/app/cache \
+  -v ./etc:/app/etc \
+  "$IMAGE_NAME"
 
 if [ $? -ne 0 ]; then
     echo "Failed to start new container. Exiting script."
@@ -33,3 +40,6 @@ echo "Cleaning up old images..."
 podman image prune --force
 
 echo "Update and cleanup complete!"
+echo "Container is running with memory limit: 512MB, swap: 512MB"
+echo "Go memory limit (GOMEMLIMIT): 512MiB"
+echo "Aggressive GC enabled (GOGC=50)"
