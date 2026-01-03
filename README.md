@@ -10,6 +10,8 @@ It is designed for people who want full control over their digital comic collect
 ## Features
 
 - Upload & read `.cbz` (ZIP-based) comics directly in the browser
+- Supports 8 Megapixel images at 512MB memory limits
+    - (increase in bash script for higher Megapixels or remove the limitation if you don't care)
 - Full support for password-protected/encrypted CBZ files (AES-256 via yeka/zip)
 - Automatically tries all previously successful passwords when opening a new encrypted comic
 - Persists discovered passwords securely (AES-encrypted on disk, key derived from your login password)
