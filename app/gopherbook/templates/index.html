@@ -1456,48 +1456,76 @@
     }
 
     async function openReader(comic) {
-        currentComic = comic;
-        currentPage = 0;
+    currentComic = comic;
+    currentPage = 0;
 
-        document.getElementById('readerTitle').textContent = comic.title || comic.filename;
-        document.getElementById('readerModal').classList.add('active');
+    document.getElementById('readerTitle').textContent = comic.title || comic.filename;
+    document.getElementById('readerModal').classList.add('active');
 
-        if (comic.encrypted && !comic.has_password) {
-            await showPasswordModal(comic);
-            return;
-        }
-
-        const encodedId = encodeURIComponent(currentComic.id);
-        const url = '/api/pages/' + encodedId;
+    // If encrypted and no password set, try known passwords first
+    if (comic.encrypted && !comic.has_password) {
+        showMessage('Trying known passwords...', 'success');
 
         try {
-            const res = await fetch(url);
+            const res = await fetch('/api/try-passwords/' + encodeURIComponent(comic.id), {
+                method: 'POST'
+            });
 
             if (res.ok) {
                 const data = await res.json();
-                if (data.needs_password) {
-                    alert('Password required but not set. Please re-open the comic.');
-                    closeReader();
+                if (data.success) {
+                    showMessage('Password found! Loading comic...', 'success');
+                    // Reload comics to get updated data
+                    await loadComics();
+                    currentComic = comics.find(c => c.id === comic.id);
+                    // Continue to open reader normally
+                } else {
+                    // No known password worked, show password modal
+                    await showPasswordModal(comic);
                     return;
                 }
-                totalPages = data.page_count;
-                document.getElementById('totalPages').textContent = totalPages;
-                document.getElementById('pageInput').max = totalPages;
-
-                if (totalPages > 0) {
-                    loadPage(0);
-                    updateBookmarkUI();
-                } else {
-                    showMessage('No pages found in comic', 'error');
-                }
             } else {
-                const error = await res.text();
-                showMessage('Error loading comic: ' + error, 'error');
+                await showPasswordModal(comic);
+                return;
             }
         } catch (err) {
-            showMessage('Error: ' + err.message, 'error');
+            showMessage('Error trying passwords: ' + err.message, 'error');
+            await showPasswordModal(comic);
+            return;
         }
     }
+
+    const encodedId = encodeURIComponent(currentComic.id);
+    const url = '/api/pages/' + encodedId;
+
+    try {
+        const res = await fetch(url);
+
+        if (res.ok) {
+            const data = await res.json();
+            if (data.needs_password) {
+                alert('Password required but not set. Please re-open the comic.');
+                closeReader();
+                return;
+            }
+            totalPages = data.page_count;
+            document.getElementById('totalPages').textContent = totalPages;
+            document.getElementById('pageInput').max = totalPages;
+
+            if (totalPages > 0) {
+                loadPage(0);
+                updateBookmarkUI();
+            } else {
+                showMessage('No pages found in comic', 'error');
+            }
+        } else {
+            const error = await res.text();
+            showMessage('Error loading comic: ' + error, 'error');
+        }
+    } catch (err) {
+        showMessage('Error: ' + err.message, 'error');
+    }
+}
 
     async function openReaderAtBookmark(comic, bookmarkPage) {
         currentComic = comic;
