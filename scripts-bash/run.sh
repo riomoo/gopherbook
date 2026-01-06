@@ -12,7 +12,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Ensure directories exist with correct permissions
-mkdir -p ./library ./cache ./etc
+mkdir -p ./library ./cache ./etc ./watch
 
 if podman container exists "$CONTAINER_NAME"; then
     echo "Container '$CONTAINER_NAME' already exists. Stopping and removing it..."
@@ -29,6 +29,7 @@ podman run -d --name "$CONTAINER_NAME" \
   -v ./library:/app/library \
   -v ./cache:/app/cache \
   -v ./etc:/app/etc \
+  -v ./watch:/app/watch \
   "$IMAGE_NAME"
 
 if [ $? -ne 0 ]; then
