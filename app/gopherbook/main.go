@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -96,6 +98,12 @@ type Tag struct {
 	Count int    `json:"count"`
 }
 
+type TarFileInfo struct {
+	Name string
+	Size int64
+	Data []byte
+}
+
 var (
 	users                = make(map[string]User)
 	sessions             = make(map[string]Session)
@@ -114,14 +122,19 @@ var (
 	currentUser          string
 	registrationEnabled  = true
 	saveTimer            *time.Timer // For debounced saves
+	watchFolders = make(map[string]*time.Timer)
+	watchMutex   sync.RWMutex
+	watchPath    = "./watch"
 )
 
 func main() {
 	os.MkdirAll(libraryPath, 0755)
 	os.MkdirAll(cachePath, 0755)
 	os.MkdirAll(etcPath, 0755)
+	os.MkdirAll(watchPath, 0755)
 
 	loadUsers()
+	initWatchFolders()
 
 	http.HandleFunc("/api/register", handleRegister)
 	http.HandleFunc("/api/login", handleLogin)
@@ -139,6 +152,7 @@ func main() {
 	http.HandleFunc("/api/bookmark/", authMiddleware(handleBookmark))
 	http.HandleFunc("/api/admin/toggle-registration", authMiddleware(handleToggleRegistration))
 	http.HandleFunc("/api/admin/delete-comic/", authMiddleware(handleDeleteComic))
+	http.HandleFunc("/api/watch-folder", authMiddleware(handleWatchFolder))
 	http.HandleFunc("/", serveUI)
 
 	go func() {
@@ -209,6 +223,9 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	os.MkdirAll(filepath.Join(userLibrary, "Unorganized"), 0755)
 	os.MkdirAll(filepath.Join("./cache/covers", req.Username), 0755)
 
+	userWatchPath := filepath.Join(watchPath, req.Username)
+	os.MkdirAll(userWatchPath, 0755)
+
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"message": "User created"})
 }
@@ -259,6 +276,233 @@ func getCurrentUser(r *http.Request) User {
 		return User{}
 	}
 	return users[session.Username]
+}
+
+func handleWatchFolder(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user := getCurrentUser(r)
+	userWatchPath := filepath.Join(watchPath, user.Username)
+
+	// Get list of files currently in watch folder
+	files, err := os.ReadDir(userWatchPath)
+	if err != nil {
+		http.Error(w, "Error reading watch folder", http.StatusInternalServerError)
+		return
+	}
+
+	var cbzFiles []string
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(file.Name()))
+		if ext == ".cbz" {
+			cbzFiles = append(cbzFiles, file.Name())
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"watch_path": userWatchPath,
+		"files":      cbzFiles,
+		"count":      len(cbzFiles),
+	})
+}
+
+func moveFile(src, dst string) error {
+	// Try rename first (fast if same filesystem)
+	err := os.Rename(src, dst)
+	if err == nil {
+		return nil
+	}
+
+	// If rename fails (cross-filesystem), copy and delete
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	// Copy the file contents
+	_, err = io.Copy(destFile, sourceFile)
+	if err != nil {
+		return err
+	}
+
+	// Ensure data is written to disk
+	err = destFile.Sync()
+	if err != nil {
+		return err
+	}
+
+	// Close files before removing source
+	sourceFile.Close()
+	destFile.Close()
+
+	// Remove the source file
+	return os.Remove(src)
+}
+
+func importWatchFolderFiles(username, watchDir string) {
+	log.Printf("Processing watch folder for user: %s", username)
+
+	files, err := os.ReadDir(watchDir)
+	if err != nil {
+		log.Printf("Error reading watch folder: %v", err)
+		return
+	}
+
+	imported := 0
+	failed := 0
+
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(file.Name()))
+		// Support both CBZ and CBT
+		if ext != ".cbz" && ext != ".cbt" {
+			continue
+		}
+
+		sourcePath := filepath.Join(watchDir, file.Name())
+
+		// Check if file is still being written
+		info1, err := os.Stat(sourcePath)
+		if err != nil {
+			continue
+		}
+		time.Sleep(500 * time.Millisecond)
+		info2, err := os.Stat(sourcePath)
+		if err != nil {
+			continue
+		}
+
+		if info1.Size() != info2.Size() {
+			log.Printf("File still being written: %s", file.Name())
+			continue
+		}
+
+		// Import the file
+		destPath := filepath.Join(libraryPath, "Unorganized", file.Name())
+
+		// Handle duplicate filenames
+		counter := 1
+		originalName := strings.TrimSuffix(file.Name(), ext)
+		for {
+			if _, err := os.Stat(destPath); os.IsNotExist(err) {
+				break
+			}
+			destPath = filepath.Join(libraryPath, "Unorganized",
+				fmt.Sprintf("%s_%d%s", originalName, counter, ext))
+			counter++
+		}
+
+		// Move the file
+		err = moveFile(sourcePath, destPath)
+		if err != nil {
+			log.Printf("Error moving file %s: %v", file.Name(), err)
+			failed++
+			continue
+		}
+
+		// Process the comic
+		fileInfo, _ := os.Stat(destPath)
+		comic := processComic(destPath, filepath.Base(destPath), fileInfo.ModTime())
+
+		comicsMutex.Lock()
+		comics[comic.ID] = comic
+		comicsMutex.Unlock()
+
+		imported++
+		log.Printf("Imported: %s -> %s", file.Name(), comic.ID)
+	}
+
+	if imported > 0 || failed > 0 {
+		log.Printf("Watch folder import complete: %d imported, %d failed", imported, failed)
+		debounceSave()
+		runtime.GC()
+	}
+}
+
+func processWatchFolder(username, watchDir string) {
+	// Check if this is the current logged-in user
+	if currentUser != username {
+		return
+	}
+
+	files, err := os.ReadDir(watchDir)
+	if err != nil {
+		return
+	}
+
+	hasFiles := false
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(file.Name()))
+		if ext != ".cbz" && ext != ".cbt" {
+			continue
+		}
+
+		hasFiles = true
+		break
+	}
+
+	if !hasFiles {
+		return
+	}
+
+	// Debounce: wait for all files to finish copying
+	watchMutex.Lock()
+	if timer, exists := watchFolders[username]; exists {
+		timer.Stop()
+	}
+
+	watchFolders[username] = time.AfterFunc(5*time.Second, func() {
+		importWatchFolderFiles(username, watchDir)
+	})
+	watchMutex.Unlock()
+}
+
+func startWatchingUser(username string) {
+	userWatchPath := filepath.Join(watchPath, username)
+	os.MkdirAll(userWatchPath, 0755)
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		log.Printf("Started watching folder for user: %s", username)
+
+		for range ticker.C {
+			processWatchFolder(username, userWatchPath)
+		}
+	}()
+}
+
+func initWatchFolders() {
+	os.MkdirAll(watchPath, 0755)
+
+	// Create watch folders for existing users
+	for username := range users {
+		userWatchPath := filepath.Join(watchPath, username)
+		os.MkdirAll(userWatchPath, 0755)
+	}
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -319,6 +563,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	loadTags()
 	loadPasswordsWithKey(key)
 	currentEncryptionKey = key
+	startWatchingUser(req.Username)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session",
@@ -412,62 +657,66 @@ func handleComics(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleUpload(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodPost {
-        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-    // FIX: Read from the raw Body stream rather than parsing multipart if possible,
-    // but at minimum, clear the form immediately after use.
-    reader, err := r.MultipartReader()
-    if err != nil {
-        http.Error(w, "Error creating multipart reader", http.StatusBadRequest)
-        return
-    }
+	reader, err := r.MultipartReader()
+	if err != nil {
+		http.Error(w, "Error creating multipart reader", http.StatusBadRequest)
+		return
+	}
 
-    for {
-        part, err := reader.NextPart()
-        if err == io.EOF {
-            break
-        }
-        if err != nil {
-            http.Error(w, "Error reading part", http.StatusInternalServerError)
-            return
-        }
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "Error reading part", http.StatusInternalServerError)
+			return
+		}
 
-        if part.FormName() == "file" {
-            filename := part.FileName()
-            destPath := filepath.Join(libraryPath, "Unorganized", filename)
-            destFile, err := os.Create(destPath)
-            if err != nil {
-                http.Error(w, "Error saving file", http.StatusInternalServerError)
-                return
-            }
+		if part.FormName() == "file" {
+			filename := part.FileName()
 
-            // FIX: Small buffer for the actual write
-            buf := make([]byte, 32*1024)
-            _, err = io.CopyBuffer(destFile, part, buf)
-            destFile.Close()
-            if err != nil {
-                http.Error(w, "Error saving file", http.StatusInternalServerError)
-                return
-            }
+			// Validate file extension (CBZ or CBT)
+			ext := strings.ToLower(filepath.Ext(filename))
+			if ext != ".cbz" && ext != ".cbt" {
+				http.Error(w, "Only .cbz and .cbt files are supported", http.StatusBadRequest)
+				return
+			}
 
-            fileInfo, _ := os.Stat(destPath)
-            comic := processComic(destPath, filename, fileInfo.ModTime())
+			destPath := filepath.Join(libraryPath, "Unorganized", filename)
+			destFile, err := os.Create(destPath)
+			if err != nil {
+				http.Error(w, "Error saving file", http.StatusInternalServerError)
+				return
+			}
 
-            comicsMutex.Lock()
-            comics[comic.ID] = comic
-            comicsMutex.Unlock()
+			buf := make([]byte, 32*1024)
+			_, err = io.CopyBuffer(destFile, part, buf)
+			destFile.Close()
+			if err != nil {
+				http.Error(w, "Error saving file", http.StatusInternalServerError)
+				return
+			}
 
-            // FIX: Force GC after the write is finished
-            buf = nil
-            runtime.GC()
+			fileInfo, _ := os.Stat(destPath)
+			comic := processComic(destPath, filename, fileInfo.ModTime())
 
-            json.NewEncoder(w).Encode(comic)
-            return
-        }
-    }
+			comicsMutex.Lock()
+			comics[comic.ID] = comic
+			comicsMutex.Unlock()
+
+			buf = nil
+			runtime.GC()
+
+			json.NewEncoder(w).Encode(comic)
+			return
+		}
+	}
 }
 
 func logMemStats(label string) {
@@ -572,28 +821,34 @@ func handleCover(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Generating cover on-demand for: %s", comic.Filename)
 
-	// NEW: Use a channel-based semaphore for better control
+	// Use semaphore for cover generation
 	select {
 	case coverGenSemaphore <- struct{}{}:
-		// Got the lock
 		defer func() { <-coverGenSemaphore }()
 	case <-time.After(30 * time.Second):
-		// Timeout waiting for cover generation slot
 		log.Printf("Timeout waiting for cover generation slot")
 		http.Error(w, "Cover generation busy, try again later", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Double-check cache again (another request might have generated it)
+	// Double-check cache again
 	if _, err := os.Stat(cacheFile); err == nil {
 		http.ServeFile(w, r, cacheFile)
 		return
 	}
 
-	// Generate with aggressive memory management
-	err = generateCoverCacheLazy(&comic, cacheFile)
-	if err != nil {
-		log.Printf("Failed to generate cover: %v", err)
+	// Generate based on file type
+	var genErr error
+	if comic.FileType == ".cbt" {
+		genErr = generateCBTCover(&comic, cacheFile)
+	} else if comic.FileType == ".cbz" {
+		genErr = generateCoverCacheLazy(&comic, cacheFile)
+	} else {
+		genErr = fmt.Errorf("unsupported file type: %s", comic.FileType)
+	}
+
+	if genErr != nil {
+		log.Printf("Failed to generate cover: %v", genErr)
 		http.Error(w, "Failed to generate cover", http.StatusInternalServerError)
 		return
 	}
@@ -607,6 +862,446 @@ func handleCover(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Cover generation failed", http.StatusInternalServerError)
 }
 
+
+func isTarEncrypted(filePath string) (bool, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	// Read first 512 bytes (tar header size)
+	header := make([]byte, 512)
+	n, err := f.Read(header)
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+
+	// If we can successfully parse a tar header, it's not encrypted
+	reader := tar.NewReader(bytes.NewReader(header[:n]))
+	_, err = reader.Next()
+
+	// If Next() succeeds, tar is valid (not encrypted)
+	// If it fails, likely encrypted
+	return err != nil, nil
+}
+
+func openEncryptedTar(filePath, password string) (*tar.Reader, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// Read entire file (we need it all for decryption)
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decrypt
+	key := deriveKey(password)
+	decrypted, err := decryptAES(data, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create tar reader from decrypted data
+	return tar.NewReader(bytes.NewReader(decrypted)), nil
+}
+
+func extractCBTMetadata(comic *Comic) {
+	if comic.FileType != ".cbt" {
+		return
+	}
+
+	var tr *tar.Reader
+	var err error
+
+	// Check if encrypted
+	encrypted, _ := isTarEncrypted(comic.FilePath)
+
+	if encrypted {
+		if comic.Password == "" {
+			return // Can't decrypt without password
+		}
+		tr, err = openEncryptedTar(comic.FilePath, comic.Password)
+	} else {
+		f, err := os.Open(comic.FilePath)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		tr = tar.NewReader(f)
+	}
+
+	if err != nil {
+		return
+	}
+
+	// Look for ComicInfo.xml
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return
+		}
+
+		if strings.ToLower(header.Name) == "comicinfo.xml" ||
+		   strings.HasSuffix(strings.ToLower(header.Name), "/comicinfo.xml") {
+
+			// Read the XML data
+			xmlData, err := io.ReadAll(tr)
+			if err != nil {
+				return
+			}
+
+			var info ComicInfo
+			if err := xml.Unmarshal(xmlData, &info); err == nil {
+				comic.Title = info.Title
+				comic.Series = info.Series
+				comic.StoryArc = info.StoryArc
+				comic.Number = info.Number
+				comic.Publisher = info.Publisher
+				comic.Year = info.Year
+				comic.PageCount = info.PageCount
+
+				if info.Artist != "" {
+					comic.Artist = info.Artist
+				} else if info.Writer != "" {
+					comic.Artist = info.Writer
+				}
+
+				// Extract tags
+				tagsSource := info.TagsXml
+				if tagsSource == "" {
+					tagsSource = info.Genre
+				}
+
+				if tagsSource != "" {
+					rawTags := strings.FieldsFunc(tagsSource, func(r rune) bool {
+						return r == ',' || r == ';' || r == '|'
+					})
+
+					comic.Tags = make([]string, 0, len(rawTags))
+					for _, tag := range rawTags {
+						trimmed := strings.TrimSpace(tag)
+						if trimmed != "" {
+							comic.Tags = append(comic.Tags, trimmed)
+						}
+					}
+				}
+			}
+			break
+		}
+	}
+}
+
+// Add this function to open a regular (unencrypted) tar file
+func openTar(filePath string) (*tar.Reader, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	// Note: caller must close the underlying file
+	return tar.NewReader(f), nil
+}
+
+func readTarFiles(tr *tar.Reader) ([]TarFileInfo, error) {
+	var files []TarFileInfo
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		// Skip directories
+		if header.Typeflag == tar.TypeDir {
+			continue
+		}
+
+		// Read file data
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, err
+		}
+
+		files = append(files, TarFileInfo{
+			Name: header.Name,
+			Size: header.Size,
+			Data: data,
+		})
+	}
+
+	return files, nil
+}
+
+func validateCBTPassword(filePath, password string) bool {
+	tr, err := openEncryptedTar(filePath, password)
+	if err != nil {
+		return false
+	}
+
+	// Try to read first header
+	_, err = tr.Next()
+	return err == nil || err == io.EOF
+}
+
+// Add this function to generate cover from CBT
+func generateCBTCover(comic *Comic, cacheFile string) error {
+	var tr *tar.Reader
+	var err error
+	var closeFile func()
+
+	// Check if encrypted
+	encrypted, _ := isTarEncrypted(comic.FilePath)
+
+	if encrypted {
+		if comic.Password == "" {
+			return fmt.Errorf("password required")
+		}
+		tr, err = openEncryptedTar(comic.FilePath, comic.Password)
+		closeFile = func() {} // File already closed in openEncryptedTar
+	} else {
+		f, err := os.Open(comic.FilePath)
+		if err != nil {
+			return err
+		}
+		closeFile = func() { f.Close() }
+		tr = tar.NewReader(f)
+	}
+	defer closeFile()
+
+	if err != nil {
+		return err
+	}
+
+	// Find first image file
+	var imageData []byte
+	// var imageExt string
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		if header.Typeflag == tar.TypeDir {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(header.Name))
+		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+		   ext == ".gif" || ext == ".avif" || ext == ".webp" ||
+		   ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
+
+			// Found an image, read it
+			imageData, err = io.ReadAll(tr)
+			if err != nil {
+				return err
+			}
+			// imageExt = ext
+			break
+		}
+	}
+
+	if len(imageData) == 0 {
+		return fmt.Errorf("no images found in tar")
+	}
+
+	// Decode image
+	img, _, err := image.Decode(bytes.NewReader(imageData))
+	if err != nil {
+		return err
+	}
+
+	// Resize
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+
+	maxDim := 300
+	var newWidth, newHeight int
+	if width > height {
+		newWidth = maxDim
+		newHeight = int(float64(height) * float64(maxDim) / float64(width))
+	} else {
+		newHeight = maxDim
+		newWidth = int(float64(width) * float64(maxDim) / float64(height))
+	}
+
+	resized := resize.Resize(uint(newWidth), uint(newHeight), img, resize.Lanczos3)
+
+	// Save as JPEG
+	out, err := os.Create(cacheFile)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	return jpeg.Encode(out, resized, &jpeg.Options{Quality: 75})
+}
+
+// Add this function to serve CBT pages
+func serveCBTPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum string) {
+	var tr *tar.Reader
+	var err error
+	var closeFile func()
+
+	// Check if encrypted
+	encrypted, _ := isTarEncrypted(comic.FilePath)
+
+	if encrypted {
+		passwordsMutex.RLock()
+		password, hasPassword := comicPasswords[comic.ID]
+		passwordsMutex.RUnlock()
+
+		if !hasPassword {
+			http.Error(w, "Password required", http.StatusUnauthorized)
+			return
+		}
+
+		tr, err = openEncryptedTar(comic.FilePath, password)
+		closeFile = func() {}
+	} else {
+		f, err := os.Open(comic.FilePath)
+		if err != nil {
+			http.Error(w, "Error opening comic", http.StatusInternalServerError)
+			return
+		}
+		closeFile = func() { f.Close() }
+		tr = tar.NewReader(f)
+	}
+	defer closeFile()
+
+	if err != nil {
+		http.Error(w, "Error reading comic", http.StatusInternalServerError)
+		return
+	}
+
+	// Get all image files
+	var imageFiles []TarFileInfo
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "Error reading tar", http.StatusInternalServerError)
+			return
+		}
+
+		if header.Typeflag == tar.TypeDir {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(header.Name))
+		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+		   ext == ".gif" || ext == ".avif" || ext == ".webp" ||
+		   ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
+
+			data, err := io.ReadAll(tr)
+			if err != nil {
+				continue
+			}
+
+			imageFiles = append(imageFiles, TarFileInfo{
+				Name: header.Name,
+				Size: header.Size,
+				Data: data,
+			})
+		}
+	}
+
+	// Sort by name
+	sort.Slice(imageFiles, func(i, j int) bool {
+		return imageFiles[i].Name < imageFiles[j].Name
+	})
+
+	var pageIdx int
+	fmt.Sscanf(pageNum, "%d", &pageIdx)
+
+	if pageIdx < 0 || pageIdx >= len(imageFiles) {
+		http.Error(w, "Page not found", http.StatusNotFound)
+		return
+	}
+
+	targetFile := imageFiles[pageIdx]
+	ext := strings.ToLower(filepath.Ext(targetFile.Name))
+	contentType := getContentType(ext)
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Write(targetFile.Data)
+}
+
+// Add this function to get CBT page count
+func getCBTPageCount(comic Comic) (int, error) {
+	var tr *tar.Reader
+	var err error
+	var closeFile func()
+
+	// Check if encrypted
+	encrypted, _ := isTarEncrypted(comic.FilePath)
+
+	if encrypted {
+		passwordsMutex.RLock()
+		password, hasPassword := comicPasswords[comic.ID]
+		passwordsMutex.RUnlock()
+
+		if !hasPassword {
+			return 0, fmt.Errorf("password required")
+		}
+
+		tr, err = openEncryptedTar(comic.FilePath, password)
+		closeFile = func() {}
+	} else {
+		f, err := os.Open(comic.FilePath)
+		if err != nil {
+			return 0, err
+		}
+		closeFile = func() { f.Close() }
+		tr = tar.NewReader(f)
+	}
+	defer closeFile()
+
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+
+		if header.Typeflag == tar.TypeDir {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(header.Name))
+		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+		   ext == ".gif" || ext == ".avif" || ext == ".webp" ||
+		   ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
+			count++
+		}
+	}
+
+	return count, nil
+}
 
 func generateCoverCacheLazy(comic *Comic, cacheFile string) error {
 	// CRITICAL: Set very aggressive GC for this operation
@@ -1129,7 +1824,7 @@ func handleTryKnownPasswords(w http.ResponseWriter, r *http.Request) {
 	c := comics[decodedID]
 	c.Password = validPassword
 	c.HasPassword = true
-	extractCBZMetadata(&c)
+	extractMetadata(&c)
 
 	tagsMutex.Lock()
 	for _, tag := range c.Tags {
@@ -1216,7 +1911,7 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use the new validation function
+	// Use the validation function
 	if !validatePassword(comic.FilePath, req.Password) {
 		http.Error(w, "Invalid password", http.StatusBadRequest)
 		return
@@ -1234,10 +1929,16 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	comicPasswords[decodedID] = req.Password
 	passwordsMutex.Unlock()
 
-	// NOW extract metadata with the valid password
+	// Extract metadata with the valid password
 	comicsMutex.Lock()
 	c = comics[decodedID]
-	extractCBZMetadata(&c)
+
+	// IMPORTANT: Set password before extraction so it can decrypt
+	if c.FileType == ".cbt" {
+		extractCBTMetadata(&c)
+	} else if c.FileType == ".cbz" {
+		extractCBZMetadataInternal(&c)
+	}
 
 	// Update tags
 	tagsMutex.Lock()
@@ -1285,17 +1986,64 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func validatePassword(filePath string, password string) bool {
-	yr, err := yzip.OpenReader(filePath)
-	if err != nil {
-		return false
-	}
-	defer yr.Close()
+	ext := strings.ToLower(filepath.Ext(filePath))
 
-	// Try ComicInfo.xml first if it exists
-	for _, f := range yr.File {
-		if strings.ToLower(f.Name) == "comicinfo.xml" {
+	if ext == ".cbt" {
+		return validateCBTPassword(filePath, password)
+	}
+
+	if ext == ".cbz" {
+		yr, err := yzip.OpenReader(filePath)
+		if err != nil {
+			return false
+		}
+		defer yr.Close()
+
+		// Try ComicInfo.xml first
+		for _, f := range yr.File {
+			if strings.ToLower(f.Name) == "comicinfo.xml" {
+				if !f.IsEncrypted() {
+					return true
+				}
+
+				f.SetPassword(password)
+				rc, err := f.Open()
+				if err != nil {
+					return false
+				}
+
+				buf := make([]byte, 100)
+				n, err := rc.Read(buf)
+				rc.Close()
+
+				if err != nil && err != io.EOF {
+					return false
+				}
+
+				if n > 0 && strings.Contains(string(buf[:n]), "<?xml") {
+					return true
+				}
+				return false
+			}
+		}
+
+		// Try first image
+		for _, f := range yr.File {
+			if f.FileInfo().IsDir() {
+				continue
+			}
+
+			ext := strings.ToLower(filepath.Ext(f.Name))
+			isImage := ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+				ext == ".gif" || ext == ".avif" || ext == ".jxl" ||
+				ext == ".webp" || ext == ".bmp" || ext == ".jp2"
+
+			if !isImage {
+				continue
+			}
+
 			if !f.IsEncrypted() {
-				return true // Not encrypted
+				return true
 			}
 
 			f.SetPassword(password)
@@ -1304,57 +2052,13 @@ func validatePassword(filePath string, password string) bool {
 				return false
 			}
 
-			// Try to read a small amount
-			buf := make([]byte, 100)
-			n, err := rc.Read(buf)
+			_, _, err = image.DecodeConfig(rc)
 			rc.Close()
 
-			if err != nil && err != io.EOF {
-				return false
-			}
-
-			// If we read something and it looks like XML, password is valid
-			if n > 0 && strings.Contains(string(buf[:n]), "<?xml") {
-				return true
-			}
-			return false
+			return err == nil
 		}
 	}
 
-	// No ComicInfo.xml, try the first encrypted image file
-	for _, f := range yr.File {
-		if f.FileInfo().IsDir() {
-			continue
-		}
-
-		ext := strings.ToLower(filepath.Ext(f.Name))
-		isImage := ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-				   ext == ".gif" || ext == ".avif" || ext == ".jxl" ||
-				   ext == ".webp" || ext == ".bmp" || ext == ".jp2"
-
-		if !isImage {
-			continue
-		}
-
-		if !f.IsEncrypted() {
-			return true // Not encrypted
-		}
-
-		f.SetPassword(password)
-		rc, err := f.Open()
-		if err != nil {
-			return false
-		}
-
-		// Try to decode the image config (lightweight check)
-		_, _, err = image.DecodeConfig(rc)
-		rc.Close()
-
-		// If we can decode config, password is valid
-		return err == nil
-	}
-
-	// No files to test
 	return false
 }
 
@@ -1486,8 +2190,15 @@ func handleComicFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveComicPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum string) {
+	// Handle CBT files
+	if comic.FileType == ".cbt" {
+		serveCBTPage(w, r, comic, pageNum)
+		return
+	}
+
+	// Handle CBZ files
 	if comic.FileType != ".cbz" {
-		http.Error(w, "Only CBZ format supported for page viewing", http.StatusBadRequest)
+		http.Error(w, "Only CBZ and CBT formats supported for page viewing", http.StatusBadRequest)
 		return
 	}
 
@@ -1556,8 +2267,6 @@ func serveComicPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 
-	// FIX: Use an explicit 32KB buffer to stream the data.
-	// This ensures that even if the image is 50MB, only 32KB is in RAM at once.
 	buf := make([]byte, 32*1024)
 	_, err = io.CopyBuffer(w, rc, buf)
 	if err != nil {
@@ -1602,12 +2311,28 @@ func handleComicPages(w http.ResponseWriter, r *http.Request) {
 	// Load metadata on first access (if not already loaded)
 	if comic.Series == "" && comic.Title == "" {
 		loadComicMetadataLazy(comic.ID)
-		// Re-fetch comic after metadata load
 		comicsMutex.RLock()
 		comic = comics[comic.ID]
 		comicsMutex.RUnlock()
 	}
 
+	// Handle CBT files
+	if comic.FileType == ".cbt" {
+		count, err := getCBTPageCount(comic)
+		if err != nil {
+			http.Error(w, "Error reading comic", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"page_count": count,
+			"pages":      []string{},
+		})
+		return
+	}
+
+	// Handle CBZ files
 	if comic.FileType != ".cbz" {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"page_count": 0,
@@ -1651,50 +2376,71 @@ func handleComicPages(w http.ResponseWriter, r *http.Request) {
 }
 
 func processComic(filePath, filename string, modTime time.Time) Comic {
-    comic := Comic{
-        ID:            generateToken(),
-        Filename:      filename,
-        FilePath:      filePath,
-        FileType:      strings.ToLower(filepath.Ext(filename)),
-        UploadedAt:    time.Now(),
-        Artist:        "Unknown",
-        Tags:          []string{},
-        Bookmarks:     []int{},
-        LastModified:  modTime,
-        Encrypted:     false,
-        HasPassword:   false,
-    }
+	comic := Comic{
+		ID:           generateToken(),
+		Filename:     filename,
+		FilePath:     filePath,
+		FileType:     strings.ToLower(filepath.Ext(filename)),
+		UploadedAt:   time.Now(),
+		Artist:       "Unknown",
+		Tags:         []string{},
+		Bookmarks:    []int{},
+		LastModified: modTime,
+		Encrypted:    false,
+		HasPassword:  false,
+	}
 
-    // Quick check if encrypted (ONLY check, don't decrypt)
-    if comic.FileType == ".cbz" {
-        yr, err := yzip.OpenReader(comic.FilePath)
-        if err == nil {
-            // Just check first file for encryption
-            for _, f := range yr.File {
-                if f.IsEncrypted() {
-                    comic.Encrypted = true
-                    break
-                }
-            }
-            yr.Close()
-        }
-    }
+	// Check if encrypted based on file type
+	if comic.FileType == ".cbz" {
+		yr, err := yzip.OpenReader(comic.FilePath)
+		if err == nil {
+			for _, f := range yr.File {
+				if f.IsEncrypted() {
+					comic.Encrypted = true
+					break
+				}
+			}
+			yr.Close()
+		}
+	} else if comic.FileType == ".cbt" {
+		encrypted, err := isTarEncrypted(comic.FilePath)
+		if err == nil {
+			comic.Encrypted = encrypted
+		}
 
-    // Extract artist from directory structure only
-    parentDir := filepath.Dir(filePath)
-    if filepath.Base(parentDir) != "Unorganized" {
-        dirName := filepath.Base(filepath.Dir(parentDir))
-        comic.Artist = dirName
-    }
+		// IMPORTANT: Extract metadata for unencrypted CBT files
+		if !encrypted {
+			extractCBTMetadata(&comic)
 
-    comic.CoverImage = "/api/cover/" + url.QueryEscape(comic.ID)
+			// Update tag counts for newly discovered tags
+			tagsMutex.Lock()
+			for _, tag := range comic.Tags {
+				if tagData, exists := tags[tag]; exists {
+					tagData.Count++
+					tags[tag] = tagData
+				} else {
+					tags[tag] = Tag{Name: tag, Color: "#1f6feb", Count: 1}
+				}
+			}
+			tagsMutex.Unlock()
+		}
+	}
 
-    // DO NOT: extract metadata
-    // DO NOT: generate covers
-    // DO NOT: try passwords
+	// Extract artist from directory structure
+	parentDir := filepath.Dir(filePath)
+	if filepath.Base(parentDir) != "Unorganized" {
+		dirName := filepath.Base(filepath.Dir(parentDir))
+		// Only override if metadata didn't provide an artist
+		if comic.Artist == "Unknown" {
+			comic.Artist = dirName
+		}
+	}
 
-    return comic
+	comic.CoverImage = "/api/cover/" + url.QueryEscape(comic.ID)
+
+	return comic
 }
+
 
 func loadComicMetadataLazy(comicID string) error {
 	comicsMutex.Lock()
@@ -1725,8 +2471,8 @@ func loadComicMetadataLazy(comicID string) error {
 		comic.HasPassword = true
 	}
 
-	// Extract metadata NOW
-	extractCBZMetadata(&comic)
+	// Extract metadata NOW (works for both CBZ and CBT)
+	extractMetadata(&comic)
 
 	// Update tags
 	tagsMutex.Lock()
@@ -1767,7 +2513,15 @@ func loadComicMetadataLazy(comicID string) error {
 	return nil
 }
 
-func extractCBZMetadata(comic *Comic) {
+func extractMetadata(comic *Comic) {
+	if comic.FileType == ".cbz" {
+		extractCBZMetadataInternal(comic)
+	} else if comic.FileType == ".cbt" {
+		extractCBTMetadata(comic)
+	}
+}
+
+func extractCBZMetadataInternal(comic *Comic) {
 	if comic.FileType != ".cbz" {
 		return
 	}
@@ -1787,7 +2541,6 @@ func extractCBZMetadata(comic *Comic) {
 			f.SetPassword(comic.Password)
 		}
 
-		// Create temp file for the XML to offload RAM
 		tmp, err := os.CreateTemp("", "comic-metadata-*.xml")
 		if err != nil {
 			return
@@ -1801,7 +2554,6 @@ func extractCBZMetadata(comic *Comic) {
 			return
 		}
 
-		// Decrypt stream directly to disk (32KB buffer usage)
 		_, err = io.Copy(tmp, rc)
 		rc.Close()
 		if err != nil {
@@ -1825,14 +2577,12 @@ func extractCBZMetadata(comic *Comic) {
 				comic.Artist = info.Writer
 			}
 
-			// --- FIX: TAG EXTRACTION LOGIC ---
 			tagsSource := info.TagsXml
 			if tagsSource == "" {
 				tagsSource = info.Genre
 			}
 
 			if tagsSource != "" {
-				// Split by common delimiters: comma, semicolon, or pipe
 				rawTags := strings.FieldsFunc(tagsSource, func(r rune) bool {
 					return r == ',' || r == ';' || r == '|'
 				})
@@ -1845,9 +2595,7 @@ func extractCBZMetadata(comic *Comic) {
 					}
 				}
 			}
-			// ---------------------------------
 		}
-		// Break only after we've processed everything in the XML
 		break
 	}
 }
@@ -1866,7 +2614,7 @@ func scanLibrary() {
 		}
 
 		ext := strings.ToLower(filepath.Ext(path))
-		if ext != ".cbz" {
+		if ext != ".cbz" && ext != ".cbt" {
 			return nil
 		}
 
@@ -1883,15 +2631,25 @@ func scanLibrary() {
 			return nil
 		}
 
-		// Modified or new file - just update the record
+		// Modified or new file
 		if exists {
 			comicsMutex.Lock()
 			c := comics[id]
 			c.LastModified = info.ModTime()
+
+			// Re-extract metadata if file changed
+			if ext == ".cbt" {
+				// Check if encrypted
+				encrypted, _ := isTarEncrypted(path)
+				if !encrypted {
+					extractCBTMetadata(&c)
+				}
+			}
+
 			comics[id] = c
 			comicsMutex.Unlock()
 		} else {
-			// New file - create lightweight entry
+			// New file - process it fully
 			comic := processComic(path, info.Name(), info.ModTime())
 			comicsMutex.Lock()
 			comics[comic.ID] = comic
@@ -1917,6 +2675,7 @@ func scanLibrary() {
 	runtime.GC()
 	debug.FreeOSMemory()
 }
+
 
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

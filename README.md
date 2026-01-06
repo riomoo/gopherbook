@@ -1,7 +1,7 @@
-# Gopherbook – Self-Hosted Comic Library & CBZ Reader
+# Gopherbook – Self-Hosted Comic Library & CBZ/CBT Reader
 
 Gopherbook is a lightweight, single-binary, self-hosted web comic reader and library manager written in Go.  
-It is designed for people who want full control over their digital comic collection (CBZ files), including support for password-protected/encrypted archives, per-user libraries, tagging, automatic organization, and a clean modern reader.
+It is designed for people who want full control over their digital comic collection (CBZ/CBT files), including support for password-protected/encrypted archives, per-user libraries, tagging, automatic organization, and a clean modern reader.
 
 ## License
 
@@ -9,10 +9,11 @@ It is designed for people who want full control over their digital comic collect
 
 ## Features
 
-- Upload & read `.cbz` (ZIP-based) comics directly in the browser
+- Upload & read `.cbz` (ZIP-based) or `.cbt` (TAR-based) comics directly in the browser
+- **Watch folder support for bulk imports** – drop CBZ/CBT files into your watch folder and they're automatically imported
 - Supports 8 Megapixel images at 512MB memory limits
     - (increase in bash script for higher Megapixels or remove the limitation if you don't care)
-- Full support for password-protected/encrypted CBZ files (AES-256 via yeka/zip)
+- Full support for password-protected/encrypted CBZ files (AES-256 via yeka/zip) or CBT files (AES-256-CFB Openssl)
 - Automatically tries all previously successful passwords when opening a new encrypted comic
 - Persists discovered passwords securely (AES-encrypted on disk, key derived from your login password)
 - Extracts ComicInfo.xml metadata (title, series, number, writer, inker, tags, story arc, etc.)
@@ -42,7 +43,6 @@ It is designed for people who want full control over their digital comic collect
 - Or just download a pre-built binary from Releases (when available)
 
 ### Quick start (from source)
-
 ```bash
 git clone https://codeberg.org/riomoo/gopherbook.git
 cd gopherbook
@@ -53,11 +53,10 @@ go build -o gopherbook app/gopherbook/main.go
 Then open http://localhost:8080 in your browser.
 
 ## If you want to use this with podman:
-
 ```bash
 git clone https://codeberg.org/riomoo/gopherbook.git
 cd gopherbook
-./bash-scripts/run.sh
+./scripts-bash/run.sh
 ```
 
 Then open http://localhost:12010 in your browser.
@@ -65,23 +64,56 @@ Then open http://localhost:12010 in your browser.
 ### First launch
 1. On first run there are no users → registration is open
 2. Create the first account → this user automatically becomes admin
-3. Log in → start uploading CBZ files
+3. Log in → start uploading CBZ/CBT files
 
 ## Directory layout after first login
-
 ```
 ./library/username/                ← your comics (organized or Unorganized/)
 ./library/username/comics.json     ← metadata index
 ./library/username/tags.json       ← tag definitions & counts
 ./library/username/passwords.json  ← encrypted password vault (AES)
 ./cache/covers/username/           ← generated cover thumbnails
+./watch/username/                  ← watch folder for bulk imports (auto-scanned)
 ./etc/users.json                   ← user accounts (bcrypt hashes)
 ./etc/admin.json                   ← admin settings (registration toggle)
 ```
 
+## Watch folder for bulk imports
+
+Gopherbook includes an automatic watch folder system that makes bulk importing comics effortless:
+
+- **Per-user watch folders**: Each user gets their own watch folder at `./watch/[username]/`
+- **Automatic scanning**: The system checks for new CBZ/CBT files every 10 seconds
+- **Smart debouncing**: Waits 5 seconds after detecting files to ensure they're fully copied
+- **File validation**: Checks that files aren't still being written before importing
+- **Duplicate handling**: Automatically renames files if they already exist (adds _1, _2, etc.)
+- **Zero configuration**: Just drop CBZ/CBT files into your watch folder and they appear in your library
+
+### How to use
+
+1. After logging in, your personal watch folder is at `./watch/[yourusername]/`
+2. Copy or move CBZ/CBT files into this folder using any method:
+   - Direct file copy/paste
+   - SCP/SFTP upload
+   - Network share mount
+   - Automated scripts
+3. Within ~15 seconds, files are automatically imported to your library
+4. Files are **moved** (not copied) to preserve disk space
+5. Check the API endpoint `/api/watch-folder` to see pending files
+
+**Example workflow:**
+```bash
+# Bulk copy comics to your watch folder
+cp ~/Downloads/*.cbz ./watch/myusername/
+cp ~/Downloads/*.cbt ./watch/myusername/
+
+# Wait ~15 seconds, then check your library in the web UI
+# All comics will be imported and organized automatically
+```
+
 ## How encrypted/password-protected comics work
 
-- When you upload or scan an encrypted CBZ that has no known password yet, the server marks it as Encrypted = true.
+- When you upload or scan an encrypted CBZ/CBT that has no known password yet, the server marks it as Encrypted = true.
 - The first time you open it in the reader, a password prompt appears.
 - If the password is correct, Gopherbook:
   - Stores the password (encrypted with a key derived from your login password)
@@ -152,7 +184,7 @@ Please open an issue first for bigger changes.
 - Everyone who hoards comics ❤️
 
 Enjoy your library!  
-— Happy reading with Gopherbook
+– Happy reading with Gopherbook
 
 <div align="center">
 
@@ -160,6 +192,7 @@ Enjoy your library!
 
 ![Arch](https://img.shields.io/badge/Arch%20Linux-1793D1?logo=arch-linux&logoColor=fff&style=for-the-badge)
 ![Gimp Gnu Image Manipulation Program](https://img.shields.io/badge/Gimp-657D8B?style=for-the-badge&logo=gimp&logoColor=FFFFFF)
+![Podman](https://img.shields.io/badge/-Podman-892CA0?style=flat-square&logo=podman&logoColor=white)
 ![Vim](https://img.shields.io/badge/VIM-%2311AB00.svg?style=for-the-badge&logo=vim&logoColor=white)
 ![Git](https://img.shields.io/badge/git-%23F05033.svg?style=for-the-badge&logo=git&logoColor=white)
 ![Forgejo](https://img.shields.io/badge/forgejo-%23FB923C.svg?style=for-the-badge&logo=forgejo&logoColor=white)
