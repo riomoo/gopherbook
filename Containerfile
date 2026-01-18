@@ -25,7 +25,7 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
     -a \
     -ldflags="-s -w -linkmode external -extldflags '-static' -X main.GOMEMLIMIT=512MiB -X runtime.defaultGOGC=50" \
     -trimpath \
-    -o bin/main app/gopherbook/main.go
+    -o bin/main ./app/gopherbook
 RUN upx --best --ultra-brute bin/main
 RUN chmod +x bin/main
 

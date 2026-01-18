@@ -78,6 +78,15 @@ Then open http://localhost:12010 in your browser.
 ./etc/admin.json                   ← admin settings (registration toggle)
 ```
 
+## Environment Variables
+Can be used to set where everything is stored with:
+```
+GOPHERBOOK_LIBRARY=$HOME/.config/gopherbook/library
+GOPHERBOOK_CACHE=$HOME/.config/gopherbook/covers
+GOPHERBOOK_ETC=$HOME/.config/gopherbook/etc
+GOPHERBOOK_WATCH=$HOME/.config/gopherbook/watch
+```
+
 ## Watch folder for bulk imports
 
 Gopherbook includes an automatic watch folder system that makes bulk importing comics effortless:

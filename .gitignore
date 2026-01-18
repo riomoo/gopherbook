@@ -7,3 +7,5 @@ cache
 library
 etc
 watch
+binaries
+releases
