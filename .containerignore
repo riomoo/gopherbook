@@ -2,11 +2,15 @@
 .git
 .gitignore
 .gitattributes
-bash-scripts
+scripts-bash
+scripts-go
 Containerfile
+Containerfile.build
+binaries
 README.md
 xml-template
 cache
 etc
 library
 watch
+releases

@@ -1,0 +1,52 @@
+# Multi-platform build container for Gopherbook
+FROM golang:alpine AS builder
+
+RUN apk add --no-cache \
+    musl-dev \
+    gcc \
+    g++ \
+    mingw-w64-gcc \
+    wget \
+    xz \
+    git
+
+# Install UPX for binary compression
+RUN wget https://github.com/upx/upx/releases/download/v5.0.2/upx-5.0.2-amd64_linux.tar.xz && \
+    tar -xf upx-5.0.2-amd64_linux.tar.xz && \
+    mv upx-5.0.2-amd64_linux/upx /usr/local/bin/upx && \
+    rm -r upx-5.0.2-amd64_linux upx-5.0.2-amd64_linux.tar.xz
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# Build Linux binary
+RUN echo "Building Linux binary..." && \
+    CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+    -a \
+    -ldflags="-s -w -linkmode external -extldflags '-static'" \
+    -trimpath \
+    -o bin/gopherbook-linux ./app/gopherbook && \
+    upx --best --ultra-brute bin/gopherbook-linux && \
+    chmod +x bin/gopherbook-linux
+
+# Build Windows binary
+RUN echo "Building Windows binary..." && \
+    CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc go build \
+    -a \
+    -ldflags="-s -w" \
+    -trimpath \
+    -o bin/gopherbook-windows.exe ./app/gopherbook && \
+    upx --best --ultra-brute bin/gopherbook-windows.exe
+
+# Verify binaries were created
+RUN ls -lh bin/ && \
+    echo "Build complete!" && \
+    echo "Linux binary size: $(du -h bin/gopherbook-linux | cut -f1)" && \
+    echo "Windows binary size: $(du -h bin/gopherbook-windows.exe | cut -f1)"
+
+# Keep the builder stage as the final stage so we can copy files out
+FROM builder

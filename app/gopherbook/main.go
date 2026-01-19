@@ -544,8 +544,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	currentUser = req.Username
 	key := deriveKey(req.Password)
-	libraryPath = filepath.Join("./library", currentUser)
-	cachePath = filepath.Join("./cache/covers", currentUser)
+	libraryPath = filepath.Join(baseLibraryPath, currentUser)
+	cachePath = filepath.Join(baseCachePath, currentUser)
 	os.MkdirAll(filepath.Join(libraryPath, "Unorganized"), 0755)
 	os.MkdirAll(cachePath, 0755)
 
@@ -599,8 +599,8 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 	passwordsMutex.Unlock()
 	currentEncryptionKey = nil
 	currentUser = ""
-	libraryPath = "./library"
-	cachePath = "./cache/covers"
+	libraryPath = baseLibraryPath
+	cachePath = baseCachePath
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session",
@@ -2697,9 +2697,16 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r)
 	}
 }
+func getUsersPath() string {
+	return filepath.Join(etcPath, "users.json")
+}
+
+func getAdminPath() string {
+	return filepath.Join(etcPath, "admin.json")
+}
 
 func loadUsers() {
-	data, err := os.ReadFile("etc/users.json")
+	data, err := os.ReadFile(getUsersPath())
 	if err != nil {
 		return
 	}
@@ -2707,7 +2714,7 @@ func loadUsers() {
 		log.Printf("Error unmarshaling users: %v", err)
 	}
 
-	adminData, err := os.ReadFile("etc/admin.json")
+	adminData, err := os.ReadFile(getAdminPath())
 	if err == nil && len(adminData) > 0 {
 		var adminConfig struct{ RegistrationEnabled bool }
 		if err := json.Unmarshal(adminData, &adminConfig); err == nil {
@@ -2718,13 +2725,13 @@ func loadUsers() {
 
 func saveUsers() {
 	data, _ := json.MarshalIndent(users, "", "  ")
-	os.WriteFile("etc/users.json", data, 0644)
+	os.WriteFile(getUsersPath(), data, 0644)
 }
 
 func saveAdminConfig() {
 	config := struct{ RegistrationEnabled bool }{RegistrationEnabled: registrationEnabled}
 	data, _ := json.MarshalIndent(config, "", "  ")
-	os.WriteFile("etc/admin.json", data, 0644)
+	os.WriteFile(getAdminPath(), data, 0644)
 }
 
 func loadTags() {
