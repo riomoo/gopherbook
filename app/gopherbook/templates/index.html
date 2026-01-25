@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="/static/images/favicon/favicon.ico" rel="shortcut icon" type="image/x-icon">
     <title>Gopherbook</title>
     <style>
         * {
@@ -27,7 +28,7 @@
         header {
             background: #395E62;
             border-bottom: 1px solid #314C52;
-            padding: 20px 0;
+            padding: 10px 0;
             margin-bottom: 30px;
         }
 
@@ -43,6 +44,8 @@
         h1 {
             color: #1b1e2c;
             font-size: 24px;
+	    padding: 20px 10px;
+	    margin: auto;
         }
 
         .auth-section {
@@ -243,7 +246,7 @@
 
         .comic-artist {
             display: inline-block;
-            background: #1f6feb;
+            background: #446B6E;
             color: white;
             padding: 2px 8px;
             border-radius: 12px;
@@ -275,8 +278,16 @@
             width: auto;
         }
 
+        .tab:hover {
+            color: #1b1e2c;
+        }
+
         .tab.active {
             color: #395E62;
+            border-bottom-color: #395E62;
+        }
+        .tab.active:hover {
+            color: #1b1e2c;
             border-bottom-color: #395E62;
         }
 
@@ -334,7 +345,7 @@
         }
 
         .bookmark-indicator {
-            color: #f0883e;
+            color: #395E62;
             font-size: 14px;
             display: flex;
             align-items: center;
@@ -345,7 +356,7 @@
             position: absolute;
             top: 8px;
             right: 8px;
-            background: #f0883e;
+            background: #395E62;
             color: white;
             padding: 4px 8px;
             border-radius: 4px;
@@ -370,7 +381,7 @@
         }
 
         .bookmark-list-title {
-            color: #f0883e;
+            color: #395E62;
             font-weight: 600;
             margin-bottom: 8px;
             font-size: 14px;
@@ -394,8 +405,7 @@
         }
 
         .bookmark-list-item.current {
-            border-color: #f0883e;
-            background: rgba(240, 136, 62, 0.1);
+            border-color: #395E62;
         }
 
         .bookmark-delete {
@@ -539,7 +549,7 @@
         }
 
         .modal-title {
-            color: #58a6ff;
+            color: #446B6E;
             font-size: 18px;
             font-weight: 600;
         }
@@ -667,7 +677,7 @@
         }
 
         .password-modal-title {
-            color: #58a6ff;
+            color: #446B6E;
             font-size: 18px;
             font-weight: 600;
             margin-bottom: 8px;
@@ -701,7 +711,7 @@
 
         .password-input-group input:focus {
             outline: none;
-            border-color: #58a6ff;
+            border-color: #446B6E;
         }
 
         .password-modal-buttons {
@@ -726,16 +736,22 @@
 <body>
     <header>
         <div class="header-content">
-            <h1>Gopherbook</h1>
-            <div id="userInfo" class="hidden">
-                <button onclick="logout()" class="secondary-btn" style="width: auto; padding: 8px 16px;">Logout</button>
-            </div>
+		<div style="display: flex;">
+		    <img src="/static/images/pngs/CutePose2.png" alt="on book" width="67px" height="75px">
+		    <h1>Gopherbook</h1>
+		</div>
+		<div id="userInfo" class="hidden">
+			<button onclick="logout()" class="secondary-btn" style="width: auto; padding: 8px 16px;">Logout</button>
+		</div>
         </div>
     </header>
 
     <div class="container">
         <div id="authSection" class="auth-section">
             <div id="authMessage" class="message hidden"></div>
+	    <div style="display: flex; justify-content: center; margin: 0px 10px 20px 10px;">
+		<img src="/static/images/pngs/LogoPose2.png" alt="wink" style="width: 100px; height auto;">
+	    </div>
             <div class="tabs">
                 <button class="tab active" onclick="showTab('login')">Login</button>
                 <button class="tab" onclick="showTab('register')">Register</button>
@@ -859,7 +875,7 @@
                 <h4 style="font-size: 14px; color: #8b949e; margin-bottom: 12px;">Create New Tag</h4>
                 <div class="add-tag-form">
                     <input type="text" id="newTagName" class="add-tag-input" placeholder="Tag name">
-                    <input type="color" id="newTagColor" class="color-picker" value="#1f6feb">
+                    <input type="color" id="newTagColor" class="color-picker" value="#446B6E">
                     <button onclick="createTag()" style="width: auto; padding: 8px 16px;">Add</button>
                 </div>
             </div>
@@ -1052,7 +1068,7 @@
 
         selectedTags.forEach(function(tagName) {
             var tag = allTags.find(function(t) { return t.name === tagName; });
-            var color = tag ? tag.color : '#1f6feb';
+            var color = tag ? tag.color : '#446B6E';
             var filter = document.createElement('div');
             filter.className = 'tag-filter';
             filter.style.background = color;
@@ -1200,7 +1216,7 @@
                 tagsHTML = '<div class="comic-tags">';
                 comic.tags.forEach(tagName => {
                     const tag = allTags.find(t => t.name === tagName);
-                    const color = tag ? tag.color : '#1f6feb';
+                    const color = tag ? tag.color : '#446B6E';
                     tagsHTML += '<span class="comic-tag" style="background: ' + color + '">' + tagName + '</span>';
                 });
                 tagsHTML += '</div>';
@@ -1279,7 +1295,7 @@
 
         managingComic.tags.forEach(tagName => {
             const tag = allTags.find(t => t.name === tagName);
-            const color = tag ? tag.color : '#1f6feb';
+            const color = tag ? tag.color : '#446B6E';
 
             const item = document.createElement('div');
             item.className = 'tag-item';
@@ -1367,7 +1383,7 @@
 
         if (res.ok) {
             document.getElementById('newTagName').value = '';
-            document.getElementById('newTagColor').value = '#1f6feb';
+            document.getElementById('newTagColor').value = '#446B6E';
             loadTags();
             renderAvailableTags();
             showMessage('Tag created!', 'success');
@@ -1985,6 +2001,30 @@
     })
     .catch(function(err) {
         console.error('Initial comics fetch failed:', err);
+    });
+
+    // Add Enter key support for login form
+    document.getElementById('loginUsername').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            login();
+        }
+    });
+    document.getElementById('loginPassword').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            login();
+        }
+    });
+
+    // Add Enter key support for register form
+    document.getElementById('regUsername').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            register();
+        }
+    });
+    document.getElementById('regPassword').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            register();
+        }
     });
     </script>
 </body>

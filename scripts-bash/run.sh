@@ -41,6 +41,6 @@ echo "Cleaning up old images..."
 podman image prune --force
 
 echo "Update and cleanup complete!"
-echo "Container is running with memory limit: 512MB, swap: 512MB"
+echo "Container is running with memory limit: 512MB"
 echo "Go memory limit (GOMEMLIMIT): 512MiB"
 echo "Aggressive GC enabled (GOGC=50)"
