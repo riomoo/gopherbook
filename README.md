@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/gopherbook-title.png" alt="Description" width="50%">
+<img src="https://git.jester-designs.com/riomoo/gopherbook/media/branch/main/docs/images/gopherbook-title.png" alt="Description" width="50%">
 
 </div>
 
@@ -15,7 +15,7 @@ It is designed for people who want full control over their digital comic collect
 
 ## License
 
-[![Custom badge](docs/images/svgs/PIL.svg)](LICENSE)
+[![Custom badge](https://git.jester-designs.com/riomoo/gopherbook/media/branch/main/docs/images/svgs/PIL.svg)](LICENSE)
 
 ## Features
 
