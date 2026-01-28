@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:de0d48f7f5e3a113951ab4d5581c6da0f18a343d0d489dda0f635f2e7d72a632
-size 447
+<svg xmlns="http://www.w3.org/2000/svg" width="114" height="28">
+    <g shape-rendering="crispEdges">
+        <rect width="75" height="28" fill="#555"/>
+        <rect x="75" width="39" height="28" fill="#07124A"/>
+    </g>
+    <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="10" font-weight="bold">
+        <text x="37" y="18">LICENSE</text>
+        <text x="94" y="18">PIL</text>
+    </g>
+</svg>
