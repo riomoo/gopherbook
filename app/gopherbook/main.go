@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"io/fs"
 	"sync"
 	"time"
 	"runtime"
@@ -38,6 +39,9 @@ import (
 
 //go:embed templates/index.html
 var templateFS embed.FS
+
+//go:embed all:static
+var staticFS embed.FS
 
 // ComicInfo represents the standard ComicInfo.xml metadata
 type ComicInfo struct {
@@ -135,6 +139,14 @@ func main() {
 
 	loadUsers()
 	initWatchFolders()
+	// Create static sub-filesystem once
+	staticSubFS, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		log.Fatal(fmt.Errorf("failed to create static sub-filesystem: %w", err))
+	}
+
+	// Create handlers once and reuse
+	staticHandler := http.FileServer(http.FS(staticSubFS))
 
 	http.HandleFunc("/api/register", handleRegister)
 	http.HandleFunc("/api/login", handleLogin)
@@ -154,6 +166,7 @@ func main() {
 	http.HandleFunc("/api/admin/delete-comic/", authMiddleware(handleDeleteComic))
 	http.HandleFunc("/api/watch-folder", authMiddleware(handleWatchFolder))
 	http.HandleFunc("/", serveUI)
+	http.Handle("/static/", http.StripPrefix("/static/", staticHandler))
 
 	go func() {
 		for {
@@ -1599,7 +1612,7 @@ func saveJPEG(img image.Image, path string) error {
 	defer out.Close()
 
 	// Lower quality = smaller memory footprint during encoding
-	err = jpeg.Encode(out, img, &jpeg.Options{Quality: 70})
+	err = jpeg.Encode(out, img, &jpeg.Options{Quality: 85})
 	img = nil
 
 	runtime.GC()
@@ -1643,7 +1656,7 @@ func handleTags(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if req.Color == "" {
-			req.Color = "#1f6feb"
+			req.Color = "#446B6E"
 		}
 
 		tagsMutex.Lock()
@@ -1832,7 +1845,7 @@ func handleTryKnownPasswords(w http.ResponseWriter, r *http.Request) {
 			tagData.Count++
 			tags[tag] = tagData
 		} else {
-			tags[tag] = Tag{Name: tag, Color: "#1f6feb", Count: 1}
+			tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
 		}
 	}
 	tagsMutex.Unlock()
@@ -1947,7 +1960,7 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 			tagData.Count++
 			tags[tag] = tagData
 		} else {
-			tags[tag] = Tag{Name: tag, Color: "#1f6feb", Count: 1}
+			tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
 		}
 	}
 	tagsMutex.Unlock()
@@ -2419,7 +2432,7 @@ func processComic(filePath, filename string, modTime time.Time) Comic {
 					tagData.Count++
 					tags[tag] = tagData
 				} else {
-					tags[tag] = Tag{Name: tag, Color: "#1f6feb", Count: 1}
+					tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
 				}
 			}
 			tagsMutex.Unlock()
@@ -2481,7 +2494,7 @@ func loadComicMetadataLazy(comicID string) error {
 			tagData.Count++
 			tags[tag] = tagData
 		} else {
-			tags[tag] = Tag{Name: tag, Color: "#1f6feb", Count: 1}
+			tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
 		}
 	}
 	tagsMutex.Unlock()

@@ -35,12 +35,15 @@ RUN echo "Building Linux binary..." && \
 
 # Build Windows binary
 RUN echo "Building Windows binary..." && \
+    echo 'IDI_ICON1 ICON "./app/gopherbook/static/images/favicon/favicon.ico"' > gopherbook.rc && \
+    x86_64-w64-mingw32-windres gopherbook.rc -o ./app/gopherbook/gopherbook.syso && \
     CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc go build \
     -a \
     -ldflags="-s -w" \
     -trimpath \
     -o bin/gopherbook-windows.exe ./app/gopherbook && \
-    upx --best --ultra-brute bin/gopherbook-windows.exe
+    upx --best --ultra-brute bin/gopherbook-windows.exe && \
+    rm ./app/gopherbook/gopherbook.syso gopherbook.rc
 
 # Verify binaries were created
 RUN ls -lh bin/ && \

@@ -1,11 +1,21 @@
-# Gopherbook – Self-Hosted Comic Library & CBZ/CBT Reader
+<div align="center">
+
+<img src="docs/images/gopherbook-title.png" alt="Description" width="50%">
+
+</div>
+
+<div align="center">
+
+## Self-Hosted Comic Library & CBZ/CBT Reader
 
 Gopherbook is a lightweight, single-binary, self-hosted web comic reader and library manager written in Go.  
 It is designed for people who want full control over their digital comic collection (CBZ/CBT files), including support for password-protected/encrypted archives, per-user libraries, tagging, automatic organization, and a clean modern reader.
 
+</div>
+
 ## License
 
-[![Custom badge](https://img.shields.io/endpoint?style=for-the-badge&url=https%3A%2F%2Fshare.jester-designs.com%2Fview%2Fpil.json)](LICENSE)
+[![Custom badge](docs/images/svgs/PIL.svg)](LICENSE)
 
 ## Features
 
@@ -185,6 +195,10 @@ Pull requests are welcome! Especially:
 - More metadata sources (ComicVine, etc.)
 
 Please open an issue first for bigger changes.
+
+## If you'd like to know about the new mascot Vinny
+
+- Check the [Wiki](/riomoo/gopherbook/wiki/Meet-Vinny.md)!
 
 ## Thanks / Credits
 
