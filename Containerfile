@@ -29,7 +29,7 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
 RUN upx --best --ultra-brute bin/main
 RUN chmod +x bin/main
 
-FROM cgr.dev/chainguard/static:latest
+FROM git.jester-designs.com/riomoo/alisterbase:1.0.0
 
 WORKDIR /app
 

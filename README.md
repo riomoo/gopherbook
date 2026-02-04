@@ -66,7 +66,16 @@ Then open http://localhost:8080 in your browser.
 ```bash
 git clone https://codeberg.org/riomoo/gopherbook.git
 cd gopherbook
-./scripts-bash/run.sh
+./scripts-bash/run-gb-container/run-podman.sh
+```
+
+or 
+
+## If you want to use this with docker:
+```bash
+git clone https://codeberg.org/riomoo/gopherbook.git
+cd gopherbook
+./scripts-bash/run-gb-container/run-docker.sh
 ```
 
 Then open http://localhost:12010 in your browser.
@@ -198,7 +207,11 @@ Please open an issue first for bigger changes.
 
 ## If you'd like to know about the new mascot Vinny
 
-- Check the [Wiki](/riomoo/gopherbook/wiki/Meet-Vinny.md)!
+- Check the Wiki!
+- **GitHub**: https://github.com/riomoo/gopherbook/wiki/Meet-Vinny
+- **GitGud**: https://gitgud.io/riomoo/gopherbook/-/wikis/Meet-Vinny
+- **JesterDesigns**: https://git.jester-designs.com/riomoo/gopherbook/wiki/Meet-Vinny
+
 
 ## Thanks / Credits
 
