@@ -35,6 +35,7 @@ import (
 	_ "github.com/gen2brain/avif"
 	"golang.org/x/crypto/bcrypt"
 	yzip "github.com/yeka/zip"
+	bolt "go.etcd.io/bbolt"
 )
 
 //go:embed templates/index.html
@@ -96,10 +97,36 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
+type ShareLink struct {
+	ID                    string     `json:"id"`
+	ComicID               string     `json:"comic_id"`
+	Username              string     `json:"username"`
+	CreatedAt             time.Time  `json:"created_at"`
+	ExpiresAt             *time.Time `json:"expires_at,omitempty"` // nil = permanent
+	Permanent             bool       `json:"permanent"`
+	ComicPassword         string     `json:"-"`                              // plaintext, in-memory only, never serialised
+	SharePasswordHash     string     `json:"share_password_hash,omitempty"`  // bcrypt hash of the share-level password
+	EncryptedComicPassword string    `json:"encrypted_comic_password,omitempty"` // AES(comicPassword, deriveKey(sharePassword)), base64
+	ComicEncrypted        bool       `json:"comic_encrypted"`               // true when the underlying comic is encrypted
+	ComicFilePath         string     `json:"comic_file_path"`               // snapshot so lookup works when user is offline
+	ComicFileType         string     `json:"comic_file_type"`
+	ComicTitle            string     `json:"comic_title"`
+	ComicFilename         string     `json:"comic_filename"`
+}
+
 type Tag struct {
 	Name  string `json:"name"`
 	Color string `json:"color"`
 	Count int    `json:"count"`
+}
+
+type Category struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	ComicIDs  []string  `json:"comic_ids"`
+	CoverType string    `json:"cover_type"` // "collage" or "upload"
+	CoverPath string    `json:"cover_path"` // path to custom cover if uploaded
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type TarFileInfo struct {
@@ -108,13 +135,25 @@ type TarFileInfo struct {
 	Data []byte
 }
 
+type shareUnlockSession struct {
+	ComicPassword string
+	ExpiresAt     time.Time
+}
+
 var (
+	db                   *bolt.DB
 	users                = make(map[string]User)
 	sessions             = make(map[string]Session)
 	comics               = make(map[string]Comic)
 	tags                 = make(map[string]Tag)
 	comicPasswords       = make(map[string]string)
-	coverGenSemaphore    = make(chan struct{}, 1) // Only ONE cover generation at a time
+	shareLinks              = make(map[string]ShareLink) // token -> ShareLink
+	shareLinksMutex         sync.RWMutex
+	shareUnlockSessions     = make(map[string]shareUnlockSession) // key=(shareToken+":"+nonce)
+	shareUnlockSessionsMutex sync.RWMutex
+	coverGenSemaphore       = make(chan struct{}, 1) // Only ONE cover generation at a time
+	categories           = make(map[string]Category)
+	categoriesMutex      sync.RWMutex
 	comicsMutex          sync.RWMutex
 	sessionsMutex        sync.RWMutex
 	tagsMutex            sync.RWMutex
@@ -136,6 +175,19 @@ func main() {
 	os.MkdirAll(cachePath, 0755)
 	os.MkdirAll(etcPath, 0755)
 	os.MkdirAll(watchPath, 0755)
+
+	var err error
+	db, err = bolt.Open(filepath.Join(etcPath, "gopherbooks.db"), 0600, &bolt.Options{Timeout: 1 * time.Second})
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Ensure top-level buckets exist
+	db.Update(func(tx *bolt.Tx) error {
+		tx.CreateBucketIfNotExists([]byte("config"))
+		return nil
+	})
 
 	loadUsers()
 	initWatchFolders()
@@ -164,7 +216,19 @@ func main() {
 	http.HandleFunc("/api/bookmark/", authMiddleware(handleBookmark))
 	http.HandleFunc("/api/admin/toggle-registration", authMiddleware(handleToggleRegistration))
 	http.HandleFunc("/api/admin/delete-comic/", authMiddleware(handleDeleteComic))
+	http.HandleFunc("/api/delete-comic/", authMiddleware(handleUserDeleteComic))
 	http.HandleFunc("/api/watch-folder", authMiddleware(handleWatchFolder))
+	http.HandleFunc("/api/share/create/", authMiddleware(handleCreateShare))
+	http.HandleFunc("/api/share/list", authMiddleware(handleListShares))
+	http.HandleFunc("/api/share/delete/", authMiddleware(handleDeleteShare))
+	http.HandleFunc("/api/share/unlock/", handleShareUnlock)
+	http.HandleFunc("/api/categories", authMiddleware(handleCategories))
+	http.HandleFunc("/api/category/create", authMiddleware(handleCreateCategory))
+	http.HandleFunc("/api/category/update/", authMiddleware(handleUpdateCategory))
+	http.HandleFunc("/api/category/delete/", authMiddleware(handleDeleteCategory))
+	http.HandleFunc("/api/category/cover/", authMiddleware(handleCategorycover))
+	http.HandleFunc("/api/category/upload-cover/", authMiddleware(handleCategoryUploadCover))
+	http.HandleFunc("/s/", handleSharedComic)
 	http.HandleFunc("/", serveUI)
 	http.Handle("/static/", http.StripPrefix("/static/", staticHandler))
 
@@ -178,9 +242,16 @@ func main() {
 
 	// Periodic session cleanup
 	go cleanupSessions()
+	// Periodic share link expiry cleanup
+	go cleanupExpiredShareLinks()
 
-	log.Println("Server starting on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	port := os.Getenv("GBKPORT")
+	if port == "" {
+		port = "8080"
+	}
+	addr := ":" + port
+	log.Printf("Server starting on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
 func handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +298,12 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 		IsAdmin:      len(users) == 0,
 	}
 	saveUsers()
+
+	// Create per-user bbolt buckets
+	db.Update(func(tx *bolt.Tx) error {
+		return ensureUserBuckets(tx, req.Username)
+	})
+
 	if len(users) == 1 {
 		saveAdminConfig()
 		registrationEnabled = true
@@ -562,6 +639,11 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	os.MkdirAll(filepath.Join(libraryPath, "Unorganized"), 0755)
 	os.MkdirAll(cachePath, 0755)
 
+	// Ensure per-user buckets exist (handles existing users before migration)
+	db.Update(func(tx *bolt.Tx) error {
+		return ensureUserBuckets(tx, currentUser)
+	})
+
 	comicsMutex.Lock()
 	comics = make(map[string]Comic)
 	comicsMutex.Unlock()
@@ -575,6 +657,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	loadComics()
 	loadTags()
 	loadPasswordsWithKey(key)
+	loadShareLinks(req.Username)
+	loadCategories()
 	currentEncryptionKey = key
 	startWatchingUser(req.Username)
 
@@ -610,6 +694,9 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 	passwordsMutex.Lock()
 	comicPasswords = make(map[string]string)
 	passwordsMutex.Unlock()
+	categoriesMutex.Lock()
+	categories = make(map[string]Category)
+	categoriesMutex.Unlock()
 	currentEncryptionKey = nil
 	currentUser = ""
 	libraryPath = baseLibraryPath
@@ -768,6 +855,48 @@ func handleDeleteComic(w http.ResponseWriter, r *http.Request) {
 	comicsMutex.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Deleted"})
+}
+
+// handleUserDeleteComic lets any authenticated user delete their own comics.
+func handleUserDeleteComic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/delete-comic/")
+	decodedID, _ := url.QueryUnescape(id)
+
+	comicsMutex.Lock()
+	comic, exists := comics[decodedID]
+	if !exists {
+		comicsMutex.Unlock()
+		http.Error(w, "Comic not found", http.StatusNotFound)
+		return
+	}
+	os.Remove(comic.FilePath)
+	// Also remove cached cover
+	cacheFile := filepath.Join(cachePath, comic.ID+".jpg")
+	os.Remove(cacheFile)
+	for _, tag := range comic.Tags {
+		updateTagCount(tag, -1)
+	}
+	delete(comics, decodedID)
+	comicsMutex.Unlock()
+
+	// Remove any share links for this comic
+	shareLinksMutex.Lock()
+	for token, sl := range shareLinks {
+		if sl.ComicID == decodedID {
+			delete(shareLinks, token)
+		}
+	}
+	shareLinksMutex.Unlock()
+	saveShareLinks(getCurrentUser(r).Username)
+
+	debounceSave()
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "Deleted"})
 }
 
@@ -1097,7 +1226,6 @@ func generateCBTCover(comic *Comic, cacheFile string) error {
 
 	// Find first image file
 	var imageData []byte
-	// var imageExt string
 
 	for {
 		header, err := tr.Next()
@@ -1174,11 +1302,15 @@ func serveCBTPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum s
 	encrypted, _ := isTarEncrypted(comic.FilePath)
 
 	if encrypted {
-		passwordsMutex.RLock()
-		password, hasPassword := comicPasswords[comic.ID]
-		passwordsMutex.RUnlock()
-
-		if !hasPassword {
+		// Prefer password already on the struct (e.g. from a share link),
+		// fall back to the global in-memory map.
+		password := comic.Password
+		if password == "" {
+			passwordsMutex.RLock()
+			password = comicPasswords[comic.ID]
+			passwordsMutex.RUnlock()
+		}
+		if password == "" {
 			http.Error(w, "Password required", http.StatusUnauthorized)
 			return
 		}
@@ -1267,11 +1399,15 @@ func getCBTPageCount(comic Comic) (int, error) {
 	encrypted, _ := isTarEncrypted(comic.FilePath)
 
 	if encrypted {
-		passwordsMutex.RLock()
-		password, hasPassword := comicPasswords[comic.ID]
-		passwordsMutex.RUnlock()
-
-		if !hasPassword {
+		// Prefer password already on the struct (e.g. from a share link),
+		// fall back to the global in-memory map.
+		password := comic.Password
+		if password == "" {
+			passwordsMutex.RLock()
+			password = comicPasswords[comic.ID]
+			passwordsMutex.RUnlock()
+		}
+		if password == "" {
 			return 0, fmt.Errorf("password required")
 		}
 
@@ -2710,100 +2846,185 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r)
 	}
 }
-func getUsersPath() string {
-	return filepath.Join(etcPath, "users.json")
+// ── bbolt helpers ──────────────────────────────────────────────────────────
+
+// userBucket returns the per-user bucket name for a given data type.
+func userBucket(kind, username string) []byte {
+	return []byte(kind + ":" + username)
 }
 
-func getAdminPath() string {
-	return filepath.Join(etcPath, "admin.json")
-}
-
-func loadUsers() {
-	data, err := os.ReadFile(getUsersPath())
-	if err != nil {
-		return
-	}
-	if err := json.Unmarshal(data, &users); err != nil {
-		log.Printf("Error unmarshaling users: %v", err)
-	}
-
-	adminData, err := os.ReadFile(getAdminPath())
-	if err == nil && len(adminData) > 0 {
-		var adminConfig struct{ RegistrationEnabled bool }
-		if err := json.Unmarshal(adminData, &adminConfig); err == nil {
-			registrationEnabled = adminConfig.RegistrationEnabled
+// ensureUserBuckets creates per-user buckets inside a write transaction.
+func ensureUserBuckets(tx *bolt.Tx, username string) error {
+	for _, kind := range []string{"comics", "tags", "passwords", "shares", "categories"} {
+		if _, err := tx.CreateBucketIfNotExists(userBucket(kind, username)); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+// ── users / admin ──────────────────────────────────────────────────────────
+
+func loadUsers() {
+	db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("config"))
+		if b == nil {
+			return nil
+		}
+
+		// Users
+		if data := b.Get([]byte("users")); len(data) > 0 {
+			if err := json.Unmarshal(data, &users); err != nil {
+				log.Printf("Error unmarshaling users: %v", err)
+			}
+		}
+
+		// Admin config
+		if data := b.Get([]byte("admin")); len(data) > 0 {
+			var adminConfig struct{ RegistrationEnabled bool }
+			if err := json.Unmarshal(data, &adminConfig); err == nil {
+				registrationEnabled = adminConfig.RegistrationEnabled
+			}
+		}
+		return nil
+	})
 }
 
 func saveUsers() {
-	data, _ := json.MarshalIndent(users, "", "  ")
-	os.WriteFile(getUsersPath(), data, 0644)
+	data, _ := json.Marshal(users)
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("config"))
+		if b == nil {
+			return nil
+		}
+		return b.Put([]byte("users"), data)
+	})
 }
 
 func saveAdminConfig() {
 	config := struct{ RegistrationEnabled bool }{RegistrationEnabled: registrationEnabled}
-	data, _ := json.MarshalIndent(config, "", "  ")
-	os.WriteFile(getAdminPath(), data, 0644)
+	data, _ := json.Marshal(config)
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("config"))
+		if b == nil {
+			return nil
+		}
+		return b.Put([]byte("admin"), data)
+	})
 }
 
-func loadTags() {
-	data, err := os.ReadFile(filepath.Join(libraryPath, "tags.json"))
-	if err != nil {
-		return
-	}
-	tagsMutex.Lock()
-	defer tagsMutex.Unlock()
-	json.Unmarshal(data, &tags)
-}
-
-func saveTags() {
-	tagsMutex.RLock()
-	defer tagsMutex.RUnlock()
-	data, _ := json.MarshalIndent(tags, "", "  ")
-	os.WriteFile(filepath.Join(libraryPath, "tags.json"), data, 0644)
-}
+// ── comics ─────────────────────────────────────────────────────────────────
 
 func saveComics() {
 	comicsMutex.RLock()
-	defer comicsMutex.RUnlock()
-	data, _ := json.MarshalIndent(comics, "", "  ")
-	os.WriteFile(filepath.Join(libraryPath, "comics.json"), data, 0644)
+	snapshot := make(map[string]Comic, len(comics))
+	for k, v := range comics {
+		snapshot[k] = v
+	}
+	comicsMutex.RUnlock()
+
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(userBucket("comics", currentUser))
+		if b == nil {
+			return nil
+		}
+		// Delete all existing keys then rewrite (simplest correctness guarantee)
+		b.ForEach(func(k, _ []byte) error { return b.Delete(k) })
+		for id, comic := range snapshot {
+			data, _ := json.Marshal(comic)
+			b.Put([]byte(id), data)
+		}
+		return nil
+	})
 }
 
 func loadComics() {
-	data, err := os.ReadFile(filepath.Join(libraryPath, "comics.json"))
-	if err != nil {
-		return
-	}
-	comicsMutex.Lock()
-	defer comicsMutex.Unlock()
-	json.Unmarshal(data, &comics)
+	db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(userBucket("comics", currentUser))
+		if b == nil {
+			return nil
+		}
+		comicsMutex.Lock()
+		defer comicsMutex.Unlock()
+		b.ForEach(func(k, v []byte) error {
+			var c Comic
+			if err := json.Unmarshal(v, &c); err == nil {
+				comics[string(k)] = c
+			}
+			return nil
+		})
+		return nil
+	})
 }
 
+// ── tags ───────────────────────────────────────────────────────────────────
+
+func saveTags() {
+	tagsMutex.RLock()
+	snapshot := make(map[string]Tag, len(tags))
+	for k, v := range tags {
+		snapshot[k] = v
+	}
+	tagsMutex.RUnlock()
+
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(userBucket("tags", currentUser))
+		if b == nil {
+			return nil
+		}
+		b.ForEach(func(k, _ []byte) error { return b.Delete(k) })
+		for name, tag := range snapshot {
+			data, _ := json.Marshal(tag)
+			b.Put([]byte(name), data)
+		}
+		return nil
+	})
+}
+
+func loadTags() {
+	db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(userBucket("tags", currentUser))
+		if b == nil {
+			return nil
+		}
+		tagsMutex.Lock()
+		defer tagsMutex.Unlock()
+		b.ForEach(func(k, v []byte) error {
+			var t Tag
+			if err := json.Unmarshal(v, &t); err == nil {
+				tags[string(k)] = t
+			}
+			return nil
+		})
+		return nil
+	})
+}
+
+// ── passwords ──────────────────────────────────────────────────────────────
+
 func loadPasswordsWithKey(key []byte) {
-	data, err := os.ReadFile(filepath.Join(libraryPath, "passwords.json"))
-	if err != nil {
-		return
-	}
-
-	b64data := strings.TrimSpace(string(data))
-	encrypted, err := base64.StdEncoding.DecodeString(b64data)
-	if err != nil {
-		return
-	}
-
-	decrypted, err := decryptAES(encrypted, key)
-	if err != nil {
-		return
-	}
-
-	passwordsMutex.Lock()
-	defer passwordsMutex.Unlock()
-	if err := json.Unmarshal(decrypted, &comicPasswords); err != nil {
-		return
-	}
-
+	db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(userBucket("passwords", currentUser))
+		if b == nil {
+			return nil
+		}
+		b64data := b.Get([]byte("encrypted"))
+		if len(b64data) == 0 {
+			return nil
+		}
+		encrypted, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(b64data)))
+		if err != nil {
+			return nil
+		}
+		decrypted, err := decryptAES(encrypted, key)
+		if err != nil {
+			return nil
+		}
+		passwordsMutex.Lock()
+		defer passwordsMutex.Unlock()
+		json.Unmarshal(decrypted, &comicPasswords)
+		return nil
+	})
 }
 
 func savePasswords() {
@@ -2812,8 +3033,8 @@ func savePasswords() {
 	}
 
 	passwordsMutex.Lock()
-	defer passwordsMutex.Unlock()
-	data, err := json.MarshalIndent(comicPasswords, "", "  ")
+	data, err := json.Marshal(comicPasswords)
+	passwordsMutex.Unlock()
 	if err != nil {
 		return
 	}
@@ -2824,7 +3045,63 @@ func savePasswords() {
 	}
 
 	b64 := base64.StdEncoding.EncodeToString(encrypted)
-	os.WriteFile(filepath.Join(libraryPath, "passwords.json"), []byte(b64), 0644)
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(userBucket("passwords", currentUser))
+		if b == nil {
+			return nil
+		}
+		return b.Put([]byte("encrypted"), []byte(b64))
+	})
+}
+
+// ── share links ────────────────────────────────────────────────────────────
+
+func loadShareLinks(username string) {
+	db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(userBucket("shares", username))
+		if b == nil {
+			return nil
+		}
+		now := time.Now()
+		shareLinksMutex.Lock()
+		defer shareLinksMutex.Unlock()
+		b.ForEach(func(k, v []byte) error {
+			var sl ShareLink
+			if err := json.Unmarshal(v, &sl); err != nil {
+				return nil
+			}
+			if sl.Permanent || sl.ExpiresAt == nil || sl.ExpiresAt.After(now) {
+				shareLinks[sl.ID] = sl
+			}
+			return nil
+		})
+		return nil
+	})
+}
+
+func saveShareLinks(username string) {
+	shareLinksMutex.RLock()
+	toSave := make([]ShareLink, 0)
+	for _, sl := range shareLinks {
+		if sl.Username == username {
+			toSave = append(toSave, sl)
+		}
+	}
+	shareLinksMutex.RUnlock()
+
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(userBucket("shares", username))
+		if b == nil {
+			return nil
+		}
+		// Clear existing entries for this user then rewrite
+		b.ForEach(func(k, _ []byte) error { return b.Delete(k) })
+		for _, sl := range toSave {
+			data, _ := json.Marshal(sl)
+			b.Put([]byte(sl.ID), data)
+		}
+		return nil
+	})
 }
 
 // Debounced save for comics and tags
@@ -2854,7 +3131,7 @@ func updateTagCount(tagName string, delta int) {
 
 func generateToken() string {
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
-	return base64.URLEncoding.EncodeToString(hash[:])
+	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
 func sanitizeFilename(filename string) string {
@@ -2946,16 +3223,971 @@ func serveUI(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// Share link handlers
+
+func cleanupExpiredShareLinks() {
+	ticker := time.NewTicker(10 * time.Minute)
+	for range ticker.C {
+		now := time.Now()
+		shareLinksMutex.Lock()
+		// Group expired links by user so we can save per-user files
+		toSave := make(map[string]bool)
+		for token, sl := range shareLinks {
+			if !sl.Permanent && sl.ExpiresAt != nil && sl.ExpiresAt.Before(now) {
+				delete(shareLinks, token)
+				toSave[sl.Username] = true
+			}
+		}
+		shareLinksMutex.Unlock()
+		for username := range toSave {
+			saveShareLinks(username)
+		}
+	}
+}
+
+// POST /api/share/create/<comicID>
+// Body: {"permanent": true} or {"expires_at": "2026-03-01T00:00:00Z"}
+func handleCreateShare(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getCurrentUser(r)
+	id := strings.TrimPrefix(r.URL.Path, "/api/share/create/")
+	decodedID, _ := url.QueryUnescape(id)
+
+	comicsMutex.RLock()
+	comic, exists := comics[decodedID]
+	comicsMutex.RUnlock()
+	if !exists {
+		http.Error(w, "Comic not found", http.StatusNotFound)
+		return
+	}
+
+	var req struct {
+		Permanent     bool       `json:"permanent"`
+		ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+		SharePassword string     `json:"share_password,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if !req.Permanent && req.ExpiresAt == nil {
+		http.Error(w, "Must set permanent:true or provide expires_at", http.StatusBadRequest)
+		return
+	}
+
+	// Snapshot the comic's password so the share link is self-contained
+	// (works even when the owner is not logged in)
+	var comicPassword string
+	if comic.Encrypted {
+		passwordsMutex.RLock()
+		comicPassword = comicPasswords[comic.ID]
+		passwordsMutex.RUnlock()
+		}
+
+	sl := ShareLink{
+		ID:             generateToken(),
+		ComicID:        decodedID,
+		Username:       user.Username,
+		CreatedAt:      time.Now(),
+		Permanent:      req.Permanent,
+		ExpiresAt:      req.ExpiresAt,
+		ComicPassword:  comicPassword, // in-memory only, never written to disk as plaintext
+		ComicEncrypted: comic.Encrypted,
+		ComicFilePath:  comic.FilePath,
+		ComicFileType:  comic.FileType,
+		ComicTitle:     comic.Title,
+		ComicFilename:  comic.Filename,
+	}
+
+	if comic.Encrypted && req.SharePassword != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(req.SharePassword), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, "Error hashing share password", http.StatusInternalServerError)
+			return
+		}
+		sl.SharePasswordHash = string(hash)
+
+		if comicPassword != "" {
+			key := deriveKey(req.SharePassword)
+			enc, err := encryptAES([]byte(comicPassword), key)
+			if err != nil {
+				http.Error(w, "Error encrypting comic password", http.StatusInternalServerError)
+				return
+			}
+			sl.EncryptedComicPassword = base64.StdEncoding.EncodeToString(enc)
+		}
+	}
+
+	shareLinksMutex.Lock()
+	shareLinks[sl.ID] = sl
+	shareLinksMutex.Unlock()
+	saveShareLinks(user.Username)
+
+	// Never expose the plaintext comic password or the bcrypt hash via API
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"token":              sl.ID,
+		"url":                "/s/" + sl.ID,
+		"comic_encrypted":    sl.ComicEncrypted,
+		"has_share_password": sl.SharePasswordHash != "",
+	})
+}
+
+// POST /api/share/unlock/<token>
+func handleShareUnlock(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := strings.TrimPrefix(r.URL.Path, "/api/share/unlock/")
+
+	shareLinksMutex.RLock()
+	sl, exists := shareLinks[token]
+	shareLinksMutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Share link not found", http.StatusNotFound)
+		return
+	}
+	if !sl.Permanent && sl.ExpiresAt != nil && sl.ExpiresAt.Before(time.Now()) {
+		http.Error(w, "Share link has expired", http.StatusGone)
+		return
+	}
+	if sl.SharePasswordHash == "" {
+		http.Error(w, "This share link does not require a password", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Password == "" {
+		http.Error(w, "Password required", http.StatusBadRequest)
+		return
+	}
+
+	// Verify the share-level password against the stored bcrypt hash
+	if err := bcrypt.CompareHashAndPassword([]byte(sl.SharePasswordHash), []byte(req.Password)); err != nil {
+		http.Error(w, "Incorrect password", http.StatusUnauthorized)
+		return
+	}
+
+	// Decrypt the comic password using a key derived from the share password
+	var comicPassword string
+	if sl.EncryptedComicPassword != "" {
+		enc, err := base64.StdEncoding.DecodeString(sl.EncryptedComicPassword)
+		if err != nil {
+			http.Error(w, "Corrupt share data", http.StatusInternalServerError)
+			return
+		}
+		key := deriveKey(req.Password)
+		plain, err := decryptAES(enc, key)
+		if err != nil {
+			http.Error(w, "Failed to decrypt comic password", http.StatusInternalServerError)
+			return
+		}
+		comicPassword = string(plain)
+	}
+
+	// Store an unlock session keyed by shareToken+":"+nonce
+	nonce := generateToken()
+	sessionKey := token + ":" + nonce
+	shareUnlockSessionsMutex.Lock()
+	shareUnlockSessions[sessionKey] = shareUnlockSession{
+		ComicPassword: comicPassword,
+		ExpiresAt:     time.Now().Add(24 * time.Hour),
+	}
+	shareUnlockSessionsMutex.Unlock()
+
+	// Cookie names cannot contain special chars like '=' (from base64 padding).
+	// Use a hex-safe version of the token for the cookie name.
+	safeCookieName := "sul_" + strings.NewReplacer("=", "", "+", "", "/", "").Replace(token)
+	http.SetCookie(w, &http.Cookie{
+		Name:     safeCookieName,
+		Value:    nonce,
+		Path:     "/s/" + token,
+		Expires:  time.Now().Add(24 * time.Hour),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Unlocked"})
+}
+
+// GET /api/share/list
+func handleListShares(w http.ResponseWriter, r *http.Request) {
+	user := getCurrentUser(r)
+	now := time.Now()
+
+	shareLinksMutex.RLock()
+	var links []ShareLink
+	for _, sl := range shareLinks {
+		if sl.Username == user.Username {
+			if sl.Permanent || sl.ExpiresAt == nil || sl.ExpiresAt.After(now) {
+				links = append(links, sl)
+			}
+		}
+	}
+	shareLinksMutex.RUnlock()
+
+	// Sort by created
+	sort.Slice(links, func(i, j int) bool {
+		return links[i].CreatedAt.After(links[j].CreatedAt)
+	})
+
+	// Build a safe response that never exposes the bcrypt hash or encrypted comic password
+	type SafeShareLink struct {
+		ID             string     `json:"id"`
+		ComicID        string     `json:"comic_id"`
+		Username       string     `json:"username"`
+		CreatedAt      time.Time  `json:"created_at"`
+		ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+		Permanent      bool       `json:"permanent"`
+		ComicEncrypted bool       `json:"comic_encrypted"`
+		HasSharePassword bool     `json:"has_share_password"`
+		ComicTitle     string     `json:"comic_title"`
+		ComicFilename  string     `json:"comic_filename"`
+	}
+	safe := make([]SafeShareLink, 0, len(links))
+	for _, sl := range links {
+		safe = append(safe, SafeShareLink{
+			ID:               sl.ID,
+			ComicID:          sl.ComicID,
+			Username:         sl.Username,
+			CreatedAt:        sl.CreatedAt,
+			ExpiresAt:        sl.ExpiresAt,
+			Permanent:        sl.Permanent,
+			ComicEncrypted:   sl.ComicEncrypted,
+			HasSharePassword: sl.SharePasswordHash != "",
+			ComicTitle:       sl.ComicTitle,
+			ComicFilename:    sl.ComicFilename,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(safe)
+}
+
+// DELETE /api/share/delete/<token>
+func handleDeleteShare(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getCurrentUser(r)
+	token := strings.TrimPrefix(r.URL.Path, "/api/share/delete/")
+
+	shareLinksMutex.Lock()
+	sl, exists := shareLinks[token]
+	if exists && sl.Username == user.Username {
+		delete(shareLinks, token)
+	}
+	shareLinksMutex.Unlock()
+
+	if !exists {
+		http.Error(w, "Share not found", http.StatusNotFound)
+		return
+	}
+	saveShareLinks(user.Username)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Deleted"})
+}
+
+// GET /s/<token> public share page (no auth required)
+func handleSharedComic(w http.ResponseWriter, r *http.Request) {
+	// Strip the leading /s/ then split off the token (everything up to the next /)
+	withoutPrefix := strings.TrimPrefix(r.URL.Path, "/s/")
+	parts := strings.SplitN(withoutPrefix, "/", 2)
+	token := parts[0]
+	rest := ""
+	if len(parts) > 1 {
+		rest = "/" + parts[1]
+	}
+
+	shareLinksMutex.RLock()
+	sl, exists := shareLinks[token]
+	shareLinksMutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Share link not found or expired", http.StatusNotFound)
+		return
+	}
+	if !sl.Permanent && sl.ExpiresAt != nil && sl.ExpiresAt.Before(time.Now()) {
+		http.Error(w, "Share link has expired", http.StatusGone)
+		return
+	}
+
+	var comicPassword string
+	if sl.SharePasswordHash != "" {
+		// Only grant the password if the visitor has a valid unlock cookie
+		safeCookieName := "sul_" + strings.NewReplacer("=", "", "+", "", "/", "").Replace(token)
+		if cookie, err := r.Cookie(safeCookieName); err == nil {
+			sessionKey := token + ":" + cookie.Value
+			shareUnlockSessionsMutex.RLock()
+			us, ok := shareUnlockSessions[sessionKey]
+			shareUnlockSessionsMutex.RUnlock()
+			if ok && time.Now().Before(us.ExpiresAt) {
+				comicPassword = us.ComicPassword
+			}
+		}
+	} else {
+		// No share-level password — use the in-memory plaintext directly
+		comicPassword = sl.ComicPassword
+	}
+
+	// Build a lightweight Comic struct from the share link's snapshotted data.
+	comic := Comic{
+		ID:        sl.ComicID,
+		FilePath:  sl.ComicFilePath,
+		FileType:  sl.ComicFileType,
+		Title:     sl.ComicTitle,
+		Filename:  sl.ComicFilename,
+		Password:  comicPassword,
+		Encrypted: sl.ComicEncrypted,
+		HasPassword: comicPassword != "",
+	}
+
+	switch {
+	case rest == "" || rest == "/":
+		serveSharedReaderPage(w, r, token, sl, comic)
+	case rest == "/cover":
+		ownerCachePath := filepath.Join(baseCachePath, sl.Username, comic.ID+".jpg")
+		if _, err := os.Stat(ownerCachePath); err == nil {
+			http.ServeFile(w, r, ownerCachePath)
+		} else {
+			// Try to generate cover on-the-fly using snapshotted data
+			tmpCache := ownerCachePath
+			os.MkdirAll(filepath.Dir(tmpCache), 0755)
+			var genErr error
+			if comic.FileType == ".cbt" {
+				genErr = generateCBTCover(&comic, tmpCache)
+			} else if comic.FileType == ".cbz" {
+				genErr = generateCoverCacheLazy(&comic, tmpCache)
+			}
+			if genErr == nil {
+				http.ServeFile(w, r, tmpCache)
+			} else {
+				http.Error(w, "Cover not available", http.StatusNotFound)
+			}
+		}
+	case rest == "/pages":
+		serveSharedPages(w, comic)
+	case strings.HasPrefix(rest, "/page/"):
+		pageNum := strings.TrimPrefix(rest, "/page/")
+		serveSharedPage(w, r, comic, pageNum)
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
+}
+
+func serveSharedPages(w http.ResponseWriter, comic Comic) {
+	w.Header().Set("Content-Type", "application/json")
+	if comic.FileType == ".cbt" {
+		count, err := getCBTPageCount(comic)
+		if err != nil {
+			http.Error(w, "Error reading comic", http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count})
+		return
+	}
+	// CBZ
+	yr, err := yzip.OpenReader(comic.FilePath)
+	if err != nil {
+		http.Error(w, "Error reading comic", http.StatusInternalServerError)
+		return
+	}
+	defer yr.Close()
+	count := 0
+	for _, f := range yr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".avif" ||
+			ext == ".jxl" || ext == ".jp2" || ext == ".webp" || ext == ".gif" || ext == ".bmp" {
+			count++
+		}
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count})
+}
+
+func serveSharedPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum string) {
+	if comic.Encrypted && !comic.HasPassword {
+		http.Error(w, "Comic requires password and none is stored for this share link", http.StatusUnauthorized)
+		return
+	}
+
+	// For CBT, use the existing helper which accepts a Comic with Password set
+	if comic.FileType == ".cbt" {
+		// Temporarily register the password so serveCBTPage can find it
+		if comic.HasPassword {
+			passwordsMutex.Lock()
+			prev, had := comicPasswords[comic.ID]
+			comicPasswords[comic.ID] = comic.Password
+			passwordsMutex.Unlock()
+			defer func() {
+				passwordsMutex.Lock()
+				if had {
+					comicPasswords[comic.ID] = prev
+				} else {
+					delete(comicPasswords, comic.ID)
+				}
+				passwordsMutex.Unlock()
+			}()
+		}
+		serveCBTPage(w, r, comic, pageNum)
+		return
+	}
+
+	// CBZ path inline implementation so we can inject the password directly
+	// without touching the global comicPasswords map permanently
+	var pageIdx int
+	fmt.Sscanf(pageNum, "%d", &pageIdx)
+
+	yr, err := yzip.OpenReader(comic.FilePath)
+	if err != nil {
+		http.Error(w, "Error reading comic", http.StatusInternalServerError)
+		return
+	}
+	defer yr.Close()
+
+	var imageFiles []*yzip.File
+	for _, f := range yr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".avif" ||
+			ext == ".jxl" || ext == ".jp2" || ext == ".webp" || ext == ".gif" || ext == ".bmp" {
+			imageFiles = append(imageFiles, f)
+		}
+	}
+	sort.Slice(imageFiles, func(i, j int) bool {
+		return imageFiles[i].Name < imageFiles[j].Name
+	})
+
+	if pageIdx < 0 || pageIdx >= len(imageFiles) {
+		http.Error(w, "Page not found", http.StatusNotFound)
+		return
+	}
+
+	targetFile := imageFiles[pageIdx]
+	if targetFile.IsEncrypted() {
+		if comic.HasPassword {
+			targetFile.SetPassword(comic.Password)
+		} else {
+			http.Error(w, "Comic requires password", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	rc, err := targetFile.Open()
+	if err != nil {
+		http.Error(w, "Error reading page", http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+
+	ext := strings.ToLower(filepath.Ext(targetFile.Name))
+	w.Header().Set("Content-Type", getContentType(ext))
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	buf := make([]byte, 32*1024)
+	io.CopyBuffer(w, rc, buf)
+}
+
+func serveSharedReaderPage(w http.ResponseWriter, r *http.Request, token string, sl ShareLink, comic Comic) {
+	title := comic.Title
+	if title == "" {
+		title = comic.Filename
+	}
+
+	// If the share link has a share-level password and the comic is encrypted,
+	// check whether the visitor has already unlocked. If not, show the password gate.
+	needsUnlock := sl.SharePasswordHash != "" && sl.ComicEncrypted && !comic.HasPassword
+	if needsUnlock {
+		// They might have a valid unlock cookie that we failed to resolve (e.g. expired session).
+		// Either way, show the gate.
+		serveSharePasswordGate(w, token, title)
+		return
+	}
+
+	html := `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>` + title + ` – Gopherbook Share</title>
+<link href="/static/images/favicon/favicon.ico" rel="shortcut icon" type="image/x-icon">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1b1e2c;color:#bfbcb7;font-family:system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column}
+header{background:#395E62;padding:10px 20px;display:flex;align-items:center;gap:12px}
+header h1{color:#1b1e2c;font-size:20px}
+.sub{font-size:13px;color:#1b1e2c;opacity:.8}
+.controls{background:#1b1e2c;border-bottom:1px solid #395E62;padding:10px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.btn{background:#395E62;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:14px}
+.btn:hover{background:#446B6E}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.page-info{color:#bfbcb7;font-size:14px}
+.reader{flex:1;display:flex;justify-content:center;align-items:center;overflow:hidden;background:#111}
+#comicImage{max-width:100%;max-height:calc(100vh - 100px);object-fit:contain}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>` + title + `</h1>
+    <div class="sub">Shared via Gopherbook</div>
+  </div>
+</header>
+<div class="controls">
+  <button class="btn" id="prevBtn" onclick="prevPage()">← Prev</button>
+  <span class="page-info">Page <span id="cur">1</span> / <span id="tot">?</span></span>
+  <button class="btn" id="nextBtn" onclick="nextPage()">Next →</button>
+</div>
+<div class="reader">
+  <img id="comicImage" alt="Comic page">
+</div>
+<script>
+var base='/s/` + token + `';
+var cur=0,tot=0;
+fetch(base+'/pages').then(r=>r.json()).then(d=>{
+  tot=d.page_count||0;
+  document.getElementById('tot').textContent=tot;
+  if(tot>0) loadPage(0);
+});
+function loadPage(n){
+  if(n<0||n>=tot) return;
+  cur=n;
+  document.getElementById('cur').textContent=cur+1;
+  document.getElementById('comicImage').src=base+'/page/'+cur;
+  document.getElementById('prevBtn').disabled=cur===0;
+  document.getElementById('nextBtn').disabled=cur===tot-1;
+}
+function prevPage(){loadPage(cur-1)}
+function nextPage(){loadPage(cur+1)}
+document.addEventListener('keydown',function(e){
+  if(e.key==='ArrowRight'||e.key==='d') nextPage();
+  if(e.key==='ArrowLeft'||e.key==='a') prevPage();
+});
+</script>
+</body>
+</html>`
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(html))
+}
+
+// serveSharePasswordGate renders a minimal password entry page for protected share links.
+func serveSharePasswordGate(w http.ResponseWriter, token, title string) {
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>` + title + ` – Gopherbook Share</title>
+<link href="/static/images/favicon/favicon.ico" rel="shortcut icon" type="image/x-icon">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1b1e2c;color:#bfbcb7;font-family:system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.gate{background:#252836;border:1px solid #395E62;border-radius:12px;padding:40px;max-width:380px;width:90%;text-align:center}
+.gate h2{color:#bfbcb7;font-size:20px;margin-bottom:8px}
+.gate p{color:#8b949e;font-size:13px;margin-bottom:24px}
+.gate input{width:100%;padding:10px 14px;background:#1b1e2c;border:1px solid #446B6E;border-radius:6px;color:#bfbcb7;font-size:15px;margin-bottom:12px;outline:none}
+.gate input:focus{border-color:#395E62}
+.gate button{width:100%;padding:10px;background:#395E62;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer}
+.gate button:hover{background:#446B6E}
+.error{color:#A55354;font-size:13px;margin-top:8px;min-height:18px}
+</style>
+</head>
+<body>
+<div class="gate">
+  <h2>&#128274; Password Required</h2>
+  <p>This shared comic is protected. Enter the share password to continue.</p>
+  <input type="password" id="pw" placeholder="Enter share password" onkeydown="if(event.key==='Enter')unlock()">
+  <button onclick="unlock()">Unlock</button>
+  <div class="error" id="err"></div>
+</div>
+<script>
+function unlock(){
+  var pw=document.getElementById('pw').value;
+  if(!pw) return;
+  fetch('/api/share/unlock/` + token + `',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})})
+    .then(function(r){
+      if(r.ok){ window.location.reload(); }
+      else{ document.getElementById('err').textContent='Incorrect password. Please try again.'; }
+    }).catch(function(){ document.getElementById('err').textContent='Network error. Please try again.'; });
+}
+</script>
+</body>
+</html>`))
+}
+
+// ── Categories ─────────────────────────────────────────────────────────────
+
+func saveCategories() {
+	categoriesMutex.RLock()
+	snapshot := make(map[string]Category, len(categories))
+	for k, v := range categories {
+		snapshot[k] = v
+	}
+	categoriesMutex.RUnlock()
+
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(userBucket("categories", currentUser))
+		if b == nil {
+			return nil
+		}
+		b.ForEach(func(k, _ []byte) error { return b.Delete(k) })
+		for id, cat := range snapshot {
+			data, _ := json.Marshal(cat)
+			b.Put([]byte(id), data)
+		}
+		return nil
+	})
+}
+
+func loadCategories() {
+	db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(userBucket("categories", currentUser))
+		if b == nil {
+			return nil
+		}
+		categoriesMutex.Lock()
+		defer categoriesMutex.Unlock()
+		b.ForEach(func(k, v []byte) error {
+			var c Category
+			if err := json.Unmarshal(v, &c); err == nil {
+				categories[string(k)] = c
+			}
+			return nil
+		})
+		return nil
+	})
+}
+
+func handleCategories(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	categoriesMutex.RLock()
+	list := make([]Category, 0, len(categories))
+	for _, c := range categories {
+		list = append(list, c)
+	}
+	categoriesMutex.RUnlock()
+
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].CreatedAt.Before(list[j].CreatedAt)
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(list)
+}
+
+func handleCreateCategory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Name     string   `json:"name"`
+		ComicIDs []string `json:"comic_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	cat := Category{
+		ID:        generateToken()[:16],
+		Name:      req.Name,
+		ComicIDs:  req.ComicIDs,
+		CoverType: "collage",
+		CreatedAt: time.Now(),
+	}
+	categoriesMutex.Lock()
+	categories[cat.ID] = cat
+	categoriesMutex.Unlock()
+	saveCategories()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cat)
+}
+
+func handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/category/update/")
+	id, _ = url.QueryUnescape(id)
+
+	var req struct {
+		Name     string   `json:"name"`
+		ComicIDs []string `json:"comic_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	categoriesMutex.Lock()
+	cat, exists := categories[id]
+	if !exists {
+		categoriesMutex.Unlock()
+		http.Error(w, "Category not found", http.StatusNotFound)
+		return
+	}
+	if req.Name != "" {
+		cat.Name = req.Name
+	}
+	if req.ComicIDs != nil {
+		cat.ComicIDs = req.ComicIDs
+	}
+	categories[id] = cat
+	categoriesMutex.Unlock()
+	saveCategories()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cat)
+}
+
+func handleDeleteCategory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/category/delete/")
+	id, _ = url.QueryUnescape(id)
+
+	categoriesMutex.Lock()
+	cat, exists := categories[id]
+	if exists {
+		// Remove custom cover if any
+		if cat.CoverPath != "" {
+			os.Remove(cat.CoverPath)
+		}
+		// Remove generated collage cache
+		collageCache := filepath.Join(cachePath, "cat_"+id+".jpg")
+		os.Remove(collageCache)
+		delete(categories, id)
+	}
+	categoriesMutex.Unlock()
+
+	if !exists {
+		http.Error(w, "Category not found", http.StatusNotFound)
+		return
+	}
+	saveCategories()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Deleted"})
+}
+
+// handleCategorycover serves the cover image for a category.
+// If cover_type == "upload" it serves the uploaded file.
+// If cover_type == "collage" it generates / serves a 2x2 collage.
+func handleCategorycover(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/category/cover/")
+	id, _ = url.QueryUnescape(id)
+
+	categoriesMutex.RLock()
+	cat, exists := categories[id]
+	categoriesMutex.RUnlock()
+	if !exists {
+		http.Error(w, "Category not found", http.StatusNotFound)
+		return
+	}
+
+	// Uploaded custom cover
+	if cat.CoverType == "upload" && cat.CoverPath != "" {
+		if _, err := os.Stat(cat.CoverPath); err == nil {
+			http.ServeFile(w, r, cat.CoverPath)
+			return
+		}
+	}
+
+	// Collage path
+	cacheFile := filepath.Join(cachePath, "cat_"+id+".jpg")
+
+	// Invalidation: regenerate if the comic list changed
+	// (simple approach: always regenerate if cat has comics and cache is older than 1s after last write -
+	//  instead just regenerate if cache missing or explicitly requested via ?regen=1)
+	regen := r.URL.Query().Get("regen") == "1"
+	if !regen {
+		if _, err := os.Stat(cacheFile); err == nil {
+			http.ServeFile(w, r, cacheFile)
+			return
+		}
+	}
+
+	if len(cat.ComicIDs) == 0 {
+		http.Error(w, "No comics in category", http.StatusNotFound)
+		return
+	}
+
+	// Collect cover images (up to 4)
+	select {
+	case coverGenSemaphore <- struct{}{}:
+		defer func() { <-coverGenSemaphore }()
+	case <-time.After(30 * time.Second):
+		http.Error(w, "Busy, try again", http.StatusServiceUnavailable)
+		return
+	}
+
+	var coverImages []image.Image
+	comicsMutex.RLock()
+	for _, comicID := range cat.ComicIDs {
+		if len(coverImages) >= 4 {
+			break
+		}
+		comic, ok := comics[comicID]
+		if !ok {
+			continue
+		}
+		coverCache := filepath.Join(cachePath, comic.ID+".jpg")
+		if _, err := os.Stat(coverCache); err != nil {
+			// Try to generate the individual cover first
+			if comic.FileType == ".cbz" {
+				generateCoverCacheLazy(&comic, coverCache)
+			} else if comic.FileType == ".cbt" {
+				generateCBTCover(&comic, coverCache)
+			}
+		}
+		if f, err := os.Open(coverCache); err == nil {
+			img, _, decErr := image.Decode(f)
+			f.Close()
+			if decErr == nil {
+				coverImages = append(coverImages, img)
+			}
+		}
+	}
+	comicsMutex.RUnlock()
+
+	if len(coverImages) == 0 {
+		http.Error(w, "No covers available", http.StatusNotFound)
+		return
+	}
+
+	// Build collage
+	const tileW, tileH = 150, 210
+	cols := 2
+	if len(coverImages) == 1 {
+		cols = 1
+	}
+	rows := (len(coverImages) + cols - 1) / cols
+	totalW := cols * tileW
+	totalH := rows * tileH
+
+	collage := image.NewRGBA(image.Rect(0, 0, totalW, totalH))
+	for i, img := range coverImages {
+		resized := resize.Thumbnail(uint(tileW), uint(tileH), img, resize.Lanczos3)
+		col := i % cols
+		row := i / cols
+		offsetX := col * tileW
+		offsetY := row * tileH
+		bounds := resized.Bounds()
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				collage.Set(offsetX+x-bounds.Min.X, offsetY+y-bounds.Min.Y, resized.At(x, y))
+			}
+		}
+	}
+
+	f, err := os.Create(cacheFile)
+	if err != nil {
+		http.Error(w, "Failed to write collage", http.StatusInternalServerError)
+		return
+	}
+	jpeg.Encode(f, collage, &jpeg.Options{Quality: 85})
+	f.Close()
+
+	http.ServeFile(w, r, cacheFile)
+}
+
+// handleCategoryUploadCover handles a multipart upload of a custom cover image for a category.
+func handleCategoryUploadCover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/category/upload-cover/")
+	id, _ = url.QueryUnescape(id)
+
+	categoriesMutex.RLock()
+	cat, exists := categories[id]
+	categoriesMutex.RUnlock()
+	if !exists {
+		http.Error(w, "Category not found", http.StatusNotFound)
+		return
+	}
+
+	r.ParseMultipartForm(10 << 20) // 10MB
+	file, header, err := r.FormFile("cover")
+	if err != nil {
+		http.Error(w, "No file provided", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".webp" && ext != ".gif" {
+		http.Error(w, "Unsupported image type", http.StatusBadRequest)
+		return
+	}
+
+	destPath := filepath.Join(cachePath, "cat_custom_"+id+ext)
+	out, err := os.Create(destPath)
+	if err != nil {
+		http.Error(w, "Failed to save", http.StatusInternalServerError)
+		return
+	}
+	io.Copy(out, file)
+	out.Close()
+
+	// Remove old collage cache
+	os.Remove(filepath.Join(cachePath, "cat_"+id+".jpg"))
+	// Remove old custom cover if different path
+	if cat.CoverPath != "" && cat.CoverPath != destPath {
+		os.Remove(cat.CoverPath)
+	}
+
+	categoriesMutex.Lock()
+	cat.CoverType = "upload"
+	cat.CoverPath = destPath
+	categories[id] = cat
+	categoriesMutex.Unlock()
+	saveCategories()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cat)
+}
+
 // Cleanup old sessions periodically
 func cleanupSessions() {
 	ticker := time.NewTicker(5 * time.Minute)
 	for range ticker.C {
+		now := time.Now()
 		sessionsMutex.Lock()
 		for token, session := range sessions {
-			if time.Now().After(session.ExpiresAt) {
+			if now.After(session.ExpiresAt) {
 				delete(sessions, token)
 			}
 		}
 		sessionsMutex.Unlock()
+
+		// Also clean up expired share unlock sessions
+		shareUnlockSessionsMutex.Lock()
+		for key, us := range shareUnlockSessions {
+			if now.After(us.ExpiresAt) {
+				delete(shareUnlockSessions, key)
+			}
+		}
+		shareUnlockSessionsMutex.Unlock()
 	}
 }

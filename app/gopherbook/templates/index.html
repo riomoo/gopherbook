@@ -257,6 +257,214 @@
             background: #8b949e;
         }
 
+        /* Alphabetic Filter Bar */
+        .alphabetic-filter-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2px;
+            margin-bottom: 20px;
+            padding: 6px;
+            background: #21262d;
+            border-radius: 8px;
+            border: 1px solid #30363d;
+            justify-content: center;
+        }
+
+        .filter-btn {
+            padding: 2px 4px;
+            background: #314C52;
+            color: #bfbcb7;
+            border: 1px solid #446B6E;
+            border-radius: 3px;
+            font-size: 20px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            width: 43px;
+            height: 22px;
+            text-align: center;
+            line-height: 18px;
+            flex-shrink: 0;
+        }
+
+        .filter-btn:hover {
+            background: #446B6E;
+            border-color: #5a7a7f;
+        }
+
+        .filter-btn.active {
+            background: #395E62;
+            border-color: #5a8d95;
+            color: #fff;
+        }
+
+        /* Pagination Controls */
+        .pagination-controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 2px;
+            margin-top: 20px;
+            padding: 6px;
+            background: #21262d;
+            border-radius: 8px;
+            border: 1px solid #30363d;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+
+        .pagination-btn {
+            padding: 2px 6px;
+            background: #314C52;
+            color: #bfbcb7;
+            border: 1px solid #446B6E;
+            border-radius: 3px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            width: 46px;
+            height: 22px;
+            line-height: 18px;
+            flex-shrink: 0;
+        }
+
+        .pagination-btn:hover:not(:disabled) {
+            background: #446B6E;
+            border-color: #5a7a7f;
+        }
+
+        .pagination-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .pagination-pages {
+            display: flex;
+            gap: 2px;
+            align-items: center;
+        }
+
+        .pagination-page-btn {
+            width: 25px;
+            height: 22px;
+            padding: 0;
+            background: #314C52;
+            color: #bfbcb7;
+            border: 1px solid #446B6E;
+            border-radius: 3px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            line-height: 18px;
+            flex-shrink: 0;
+        }
+
+        .pagination-page-btn:hover {
+            background: #446B6E;
+            border-color: #5a7a7f;
+        }
+
+        .pagination-page-btn.active {
+            background: #395E62;
+            border-color: #5a8d95;
+            color: #fff;
+        }
+
+        .pagination-ellipsis {
+            color: #8b949e;
+            font-size: 9px;
+            padding: 0 1px;
+        }
+
+        .category-card {
+            background: #1b1e2c;
+            border: 1px solid #446B6E;
+            border-radius: 6px;
+            overflow: hidden;
+            transition: transform 0.2s, border-color 0.2s;
+            cursor: pointer;
+        }
+        .category-card:hover {
+            transform: translateY(-2px);
+            border-color: #64A9AD;
+        }
+        .category-cover {
+            width: 100%;
+            height: 280px;
+            object-fit: cover;
+            display: block;
+            background: #21253a;
+        }
+        .category-cover-placeholder {
+            width: 100%;
+            height: 280px;
+            background: #21253a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+        }
+        .category-info {
+            padding: 12px 16px;
+        }
+        .category-name {
+            font-weight: 600;
+            color: #446B6E;
+            font-size: 14px;
+            margin-bottom: 4px;
+        }
+        .category-count {
+            font-size: 12px;
+            color: #8b949e;
+        }
+        #categoryModal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 900;
+            align-items: center;
+            justify-content: center;
+        }
+        #categoryModal.active { display: flex; }
+        #categoryDetailModal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            z-index: 900;
+            align-items: flex-start;
+            justify-content: center;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        #categoryDetailModal.active { display: flex; }
+        .nav-bar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 24px;
+            border-bottom: 1px solid #30363d;
+        }
+        .nav-btn {
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            color: #8b949e;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            width: auto;
+            font-size: 14px;
+        }
+        .nav-btn:hover { color: #c9d1d9; }
+        .nav-btn.active {
+            color: #446B6E;
+            border-bottom-color: #446B6E;
+        }
+
         .hidden {
             display: none;
         }
@@ -731,6 +939,145 @@
             margin-bottom: 16px;
             font-size: 13px;
         }
+
+        #confirmModal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.75);
+            z-index: 4000;
+            align-items: center;
+            justify-content: center;
+        }
+        #confirmModal.active { display: flex; }
+        .confirm-box {
+            background: #1b1e2c;
+            border: 1px solid #446B6E;
+            border-radius: 8px;
+            padding: 28px 28px 22px;
+            max-width: 380px;
+            width: 90%;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.6);
+        }
+        .confirm-title {
+            color: #bfbcb7;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .confirm-body {
+            color: #8b949e;
+            font-size: 13px;
+            margin-bottom: 22px;
+            line-height: 1.5;
+        }
+        .confirm-comic-name {
+            color: #bfbcb7;
+            font-weight: 600;
+        }
+        .confirm-warning {
+            color: #A55354;
+            font-size: 12px;
+            margin-top: 6px;
+        }
+        .confirm-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        .confirm-cancel-btn {
+            background: #314C52;
+            color: #bfbcb7;
+            border: none;
+            border-radius: 6px;
+            padding: 9px 20px;
+            font-size: 14px;
+            cursor: pointer;
+            width: auto;
+        }
+        .confirm-cancel-btn:hover { background: #446B6E; }
+        .confirm-delete-btn {
+            background: #A55354;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 9px 20px;
+            font-size: 14px;
+            cursor: pointer;
+            width: auto;
+            font-weight: 600;
+        }
+        .confirm-delete-btn:hover { background: #c0392b; }
+
+        .delete-comic-btn {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            background: rgba(165, 83, 84, 0.85);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            width: 26px;
+            height: 26px;
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 11;
+            padding: 0;
+            transition: background 0.2s;
+        }
+        .delete-comic-btn:hover {
+            background: rgba(220, 50, 50, 0.95);
+        }
+
+        #shareModal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+        #shareModal.active { display: flex; }
+        .share-link-row {
+            background: #21262d;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 10px 14px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+        }
+        .share-link-url {
+            flex: 1;
+            color: #446B6E;
+            word-break: break-all;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        .share-expiry {
+            color: #8b949e;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .share-del-btn {
+            background: #A55354;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-size: 12px;
+            width: auto;
+        }
+        .share-del-btn:hover { background: #dc3232; }
     </style>
 </head>
 <body>
@@ -785,6 +1132,14 @@
         <div id="mainSection" class="hidden">
             <div id="message"></div>
 
+            <!-- Top navigation: Library / Categories -->
+            <div class="nav-bar">
+                <button class="nav-btn active" id="navLibrary" onclick="switchView('library')">📚 Library</button>
+                <button class="nav-btn" id="navCategories" onclick="switchView('categories')">🗂 Categories</button>
+            </div>
+
+            <!-- Library view -->
+            <div id="libraryView">
 	    <div class="upload-section">
 		    <h2 style="margin-bottom: 16px; color: #c9d1d9;">Upload Comic</h2>
 		    <div class="form-group">
@@ -815,12 +1170,62 @@
                 <div class="form-group">
                     <label>Delete Comic ID:</label>
                     <input type="text" id="deleteId" placeholder="Enter comic ID">
-                    <button onclick="deleteComic()" class="secondary-btn">Delete</button>
+                    <button onclick="adminDeleteComic()" class="secondary-btn">Delete</button>
                 </div>
             </div>
             <h2 style="margin-bottom: 20px; color: #c9d1d9;">Library</h2>
+
+            <!-- Alphabetic Filter Bar -->
+            <div class="alphabetic-filter-bar">
+                <button class="filter-btn active" onclick="setAlphabeticFilter('all')" data-filter="all">All</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('0-9')" data-filter="0-9">0-9</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('A')" data-filter="A">A</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('B')" data-filter="B">B</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('C')" data-filter="C">C</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('D')" data-filter="D">D</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('E')" data-filter="E">E</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('F')" data-filter="F">F</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('G')" data-filter="G">G</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('H')" data-filter="H">H</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('I')" data-filter="I">I</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('J')" data-filter="J">J</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('K')" data-filter="K">K</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('L')" data-filter="L">L</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('M')" data-filter="M">M</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('N')" data-filter="N">N</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('O')" data-filter="O">O</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('P')" data-filter="P">P</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('Q')" data-filter="Q">Q</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('R')" data-filter="R">R</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('S')" data-filter="S">S</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('T')" data-filter="T">T</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('U')" data-filter="U">U</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('V')" data-filter="V">V</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('W')" data-filter="W">W</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('X')" data-filter="X">X</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('Y')" data-filter="Y">Y</button>
+                <button class="filter-btn" onclick="setAlphabeticFilter('Z')" data-filter="Z">Z</button>
+            </div>
+
             <div id="comicsGrid" class="comics-grid"></div>
-        </div>
+
+            <!-- Pagination Controls -->
+            <div class="pagination-controls" id="paginationControls" style="display: none;">
+                <button class="pagination-btn" onclick="previousLibraryPage()" id="prevPageBtn">Prev</button>
+                <div class="pagination-pages" id="paginationPages"></div>
+                <button class="pagination-btn" onclick="nextLibraryPage()" id="nextPageBtn">Next</button>
+            </div>
+
+            </div><!-- end #libraryView -->
+
+            <!-- Categories view -->
+            <div id="categoriesView" class="hidden">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+                    <h2 style="color:#c9d1d9;margin:0;">Categories</h2>
+                    <button onclick="openCategoryModal()" style="width:auto;padding:9px 18px;">+ New Category</button>
+                </div>
+                <div id="categoriesGrid" class="comics-grid"></div>
+            </div>
     </div>
 
     <div id="readerModal">
@@ -905,6 +1310,99 @@
 
     <div id="contextMenu" class="context-menu hidden"></div>
 
+    <!-- Category Create/Edit Modal -->
+    <div id="categoryModal">
+        <div class="modal-content" style="max-width:500px;width:95%">
+            <div class="modal-header">
+                <h3 class="modal-title" id="categoryModalTitle">New Category</h3>
+                <button class="close-btn" onclick="closeCategoryModal()">×</button>
+            </div>
+            <div class="form-group" style="margin-bottom:16px;">
+                <label>Name</label>
+                <input type="text" id="categoryName" placeholder="e.g. Favourites, Reading List…" style="width:100%;">
+            </div>
+            <div id="categoryMessage" style="margin-bottom:12px;"></div>
+            <div style="display:flex;gap:10px;">
+                <button onclick="saveCategory()" style="flex:1;">Save</button>
+                <button class="secondary-btn" onclick="closeCategoryModal()" style="flex:1;margin-top:0;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Category Detail Modal (shows comics inside + management) -->
+    <div id="categoryDetailModal">
+        <div class="modal-content" style="max-width:900px;width:95%;margin:auto;">
+            <div class="modal-header" style="flex-wrap:wrap;gap:10px;">
+                <h3 class="modal-title" id="categoryDetailName">Category</h3>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="secondary-btn" onclick="openRenameCategoryModal()" style="width:auto;padding:7px 14px;margin-top:0;">✏️ Rename</button>
+                    <button class="secondary-btn" onclick="document.getElementById('catCoverUpload').click()" style="width:auto;padding:7px 14px;margin-top:0;">🖼 Upload Cover</button>
+                    <button class="secondary-btn" onclick="regenerateCategoryCover()" style="width:auto;padding:7px 14px;margin-top:0;">🔄 Regen Collage</button>
+                    <button class="secondary-btn" style="color:#A55354;width:auto;padding:7px 14px;margin-top:0;" onclick="deleteCurrentCategory()">🗑 Delete</button>
+                    <button class="close-btn" onclick="closeCategoryDetail()" style="position:relative;top:auto;right:auto;">×</button>
+                </div>
+                <input type="file" id="catCoverUpload" accept="image/*" class="hidden" onchange="uploadCategoryCover(this)">
+            </div>
+
+            <!-- Cover preview -->
+            <div style="margin:16px 0;display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
+                <img id="categoryDetailCover" src="" alt="Cover" style="width:150px;height:210px;object-fit:cover;border-radius:6px;border:1px solid #446B6E;display:none;">
+                <div id="categoryDetailCoverPlaceholder" style="width:150px;height:210px;background:#21253a;border-radius:6px;border:1px solid #446B6E;display:flex;align-items:center;justify-content:center;font-size:40px;">🗂</div>
+                <div style="flex:1;">
+                    <p style="color:#8b949e;font-size:13px;margin-bottom:12px;" id="categoryDetailCount">0 comics</p>
+                    <p style="color:#8b949e;font-size:12px;">Right-click a comic in the library to add it to this category, or use the buttons below to remove comics.</p>
+                </div>
+            </div>
+
+            <h4 style="color:#bfbcb7;font-size:14px;margin-bottom:12px;">Comics in this Category</h4>
+            <div id="categoryComicsGrid" class="comics-grid" style="margin-bottom:20px;"></div>
+
+            <h4 style="color:#bfbcb7;font-size:14px;margin-bottom:12px;">Add Comics from Library</h4>
+            <input type="text" id="categoryComicSearch" placeholder="Search comics to add…" oninput="renderCategoryLibraryPicker()" style="width:100%;margin-bottom:10px;">
+            <div id="categoryLibraryPicker" style="max-height:250px;overflow-y:auto;border:1px solid #30363d;border-radius:6px;"></div>
+        </div>
+    </div>
+
+    <!-- Share Modal -->
+    <div id="shareModal">
+        <div class="modal-content" style="max-width:600px;width:95%">
+            <div class="modal-header">
+                <h3 class="modal-title">Share Comic</h3>
+                <button class="close-btn" onclick="closeShareModal()">×</button>
+            </div>
+            <div id="shareComicName" style="color:#8b949e;font-size:13px;margin-bottom:16px;"></div>
+
+            <h4 style="font-size:14px;color:#bfbcb7;margin-bottom:10px;">Create New Share Link</h4>
+            <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+                <div>
+                    <label style="display:block;font-size:12px;color:#8b949e;margin-bottom:4px;">Type</label>
+                    <select id="shareType" onchange="toggleShareExpiry()" style="width:auto;padding:8px;">
+                        <option value="permanent">Permanent</option>
+                        <option value="timed">Timed</option>
+                    </select>
+                </div>
+                <div id="shareExpiryGroup" style="display:none;">
+                    <label style="display:block;font-size:12px;color:#8b949e;margin-bottom:4px;">Expires At</label>
+                    <input type="datetime-local" id="shareExpiry" style="width:auto;padding:8px;">
+                </div>
+            </div>
+            <div id="sharePasswordGroup" style="display:none;margin-bottom:16px;">
+                <label style="display:block;font-size:12px;color:#8b949e;margin-bottom:4px;">🔒 Share Password <span style="color:#6b7280;font-weight:normal;">(optional — encrypts access to this link)</span></label>
+                <input type="password" id="sharePassword" placeholder="Leave blank for no password" style="width:100%;padding:8px;background:#1b1e2c;border:1px solid #446B6E;border-radius:6px;color:#bfbcb7;">
+            </div>
+            <button onclick="createShareLink()" style="width:auto;padding:9px 18px;white-space:nowrap;">Generate Link</button>
+
+            <div id="newShareResult" class="hidden" style="background:#1b1e2c;border:1px solid #446B6E;border-radius:6px;padding:12px;margin:16px 0;">
+                <div style="font-size:12px;color:#8b949e;margin-bottom:6px;">Share URL (click to copy):</div>
+                <div id="newShareUrl" class="share-link-url" onclick="copyShareUrl(this)"></div>
+                <div id="newSharePasswordHint" style="display:none;margin-top:8px;font-size:12px;color:#8b949e;">🔒 Recipients will be prompted for the share password before reading.</div>
+            </div>
+
+            <h4 style="font-size:14px;color:#bfbcb7;margin-bottom:10px;">Active Share Links</h4>
+            <div id="shareList"></div>
+        </div>
+    </div>
+
     <script>
     let comics = [];
     let allTags = [];
@@ -915,6 +1413,14 @@
     let fitMode = 'width';
     let selectedTags = new Set();
     let managingComic = null;
+    let categories = [];
+    let currentCategory = null;
+    let currentView = 'library';
+
+    // Library pagination variables
+    let currentLibraryPage = 1;
+    let comicsPerPage = 12;
+    let alphabeticFilter = 'all';
 
     // Pan variables
     let isPanning = false;
@@ -1002,6 +1508,7 @@
 
                 await loadTags();
                 await loadComics();
+                await loadCategories();
             } else {
                 const error = await res.text();
                 showMessage(error || 'Invalid credentials', 'error', 'auth');
@@ -1167,7 +1674,33 @@
             });
         }
 
-        filtered.forEach(comic => {
+        // Apply alphabetic filter
+        if (alphabeticFilter !== 'all') {
+            filtered = filtered.filter(comic => {
+                const title = comic.title || comic.filename || '';
+                const firstChar = title.charAt(0).toUpperCase();
+                if (alphabeticFilter === '0-9') {
+                    return /[0-9]/.test(firstChar);
+                } else {
+                    return firstChar === alphabeticFilter;
+                }
+            });
+        }
+
+        // Calculate pagination
+        const totalLibraryPages = Math.ceil(filtered.length / comicsPerPage);
+
+        // Reset to first page if out of bounds
+        if (currentLibraryPage > totalLibraryPages && totalLibraryPages > 0) {
+            currentLibraryPage = 1;
+        }
+
+        // Get comics for current page
+        const startIdx = (currentLibraryPage - 1) * comicsPerPage;
+        const endIdx = startIdx + comicsPerPage;
+        const pageComics = filtered.slice(startIdx, endIdx);
+
+        pageComics.forEach(comic => {
             const card = document.createElement('div');
             card.className = 'comic-card';
 
@@ -1190,6 +1723,17 @@
                 badge.textContent = '📖 ' + comic.bookmarks.length + ' bookmark' + (comic.bookmarks.length > 1 ? 's' : '');
                 coverContainer.appendChild(badge);
             }
+
+            // Delete button overlay
+            const delBtn = document.createElement('button');
+            delBtn.className = 'delete-comic-btn';
+            delBtn.title = 'Delete comic';
+            delBtn.innerHTML = '🗑';
+            delBtn.onclick = function(e) {
+                e.stopPropagation();
+                deleteComic(comic.id, comic.title || comic.filename);
+            };
+            coverContainer.appendChild(delBtn);
 
             cover.onerror = function() {
                 cover.classList.add('hidden');
@@ -1248,12 +1792,116 @@
 
             grid.appendChild(card);
         });
+
+        // Update pagination controls
+        updatePaginationControls(totalLibraryPages, currentLibraryPage);
+    }
+
+    function updatePaginationControls(totalPages, currentPage) {
+        const paginationControls = document.getElementById('paginationControls');
+        const paginationPages = document.getElementById('paginationPages');
+        const prevBtn = document.getElementById('prevPageBtn');
+        const nextBtn = document.getElementById('nextPageBtn');
+
+        if (totalPages <= 1) {
+            paginationControls.style.display = 'none';
+            return;
+        }
+
+        paginationControls.style.display = 'flex';
+        paginationPages.innerHTML = '';
+
+        prevBtn.disabled = currentPage <= 1;
+        nextBtn.disabled = currentPage >= totalPages;
+
+        const maxVisible = 7;
+        let pages = [];
+
+        if (totalPages <= maxVisible) {
+            pages = Array.from({length: totalPages}, (_, i) => i + 1);
+        } else {
+            pages = [1];
+            const start = Math.max(2, currentPage - 2);
+            const end = Math.min(totalPages - 1, currentPage + 2);
+            if (start > 2) pages.push('...');
+            for (let i = start; i <= end; i++) pages.push(i);
+            if (end < totalPages - 1) pages.push('...');
+            pages.push(totalPages);
+        }
+
+        pages.forEach(page => {
+            if (page === '...') {
+                const ellipsis = document.createElement('span');
+                ellipsis.className = 'pagination-ellipsis';
+                ellipsis.textContent = '...';
+                paginationPages.appendChild(ellipsis);
+            } else {
+                const btn = document.createElement('button');
+                btn.className = 'pagination-page-btn';
+                if (page === currentPage) btn.classList.add('active');
+                btn.textContent = page;
+                btn.onclick = () => {
+                    currentLibraryPage = page;
+                    renderComics();
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                };
+                paginationPages.appendChild(btn);
+            }
+        });
+    }
+
+    function setAlphabeticFilter(filter) {
+        alphabeticFilter = filter;
+        currentLibraryPage = 1;
+
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.getAttribute('data-filter') === filter) {
+                btn.classList.add('active');
+            }
+        });
+
+        renderComics();
+    }
+
+    function previousLibraryPage() {
+        if (currentLibraryPage > 1) {
+            currentLibraryPage--;
+            renderComics();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+    }
+
+    function nextLibraryPage() {
+        let filtered = comics;
+        if (selectedTags.size > 0) {
+            filtered = comics.filter(comic =>
+                Array.from(selectedTags).every(tag => comic.tags && comic.tags.includes(tag))
+            );
+        }
+        if (alphabeticFilter !== 'all') {
+            filtered = filtered.filter(comic => {
+                const title = comic.title || comic.filename || '';
+                const firstChar = title.charAt(0).toUpperCase();
+                return alphabeticFilter === '0-9' ? /[0-9]/.test(firstChar) : firstChar === alphabeticFilter;
+            });
+        }
+        const maxPages = Math.ceil(filtered.length / comicsPerPage);
+        if (currentLibraryPage < maxPages) {
+            currentLibraryPage++;
+            renderComics();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
     }
 
     function showContextMenu(e, comic) {
         const menu = document.getElementById('contextMenu');
         menu.className = 'context-menu';
-        menu.innerHTML = '<div class="context-menu-item" onclick="openTagModal(\'' + comic.id + '\')">Manage Tags</div>';
+        menu.innerHTML =
+            '<div class="context-menu-item" onclick="openTagModal(\'' + comic.id + '\')">Manage Tags</div>' +
+            '<div class="context-menu-item" onclick="openShareModal(\'' + comic.id + '\')">Share Comic</div>' +
+            '<div class="context-menu-item" onclick="openAddToCategoryMenu(\'' + comic.id + '\')">🗂 Add to Category…</div>' +
+            '<div class="context-menu-item" style="color:#A55354" onclick="deleteComic(\'' + comic.id + '\', \'' + (comic.title || comic.filename).replace(/'/g,"\\x27") + '\')">Delete Comic</div>';
 
         if (comic.bookmarks && comic.bookmarks.length > 0) {
             menu.innerHTML += '<div class="context-menu-item" onclick="openReaderAtBookmark(comics.find(c => c.id === \'' + comic.id + '\'), ' + comic.bookmarks[0] + ')">Go to First Bookmark (Page ' + (comic.bookmarks[0] + 1) + ')</div>';
@@ -1266,6 +1914,311 @@
             menu.className = 'context-menu hidden';
             document.removeEventListener('click', hideMenu);
         });
+    }
+
+    function openAddToCategoryMenu(comicId) {
+        if (categories.length === 0) {
+            showMessage('No categories yet. Create one in the Categories view first.', 'error');
+            return;
+        }
+        const menu = document.getElementById('contextMenu');
+        menu.className = 'context-menu';
+        menu.style.minWidth = '200px';
+        let html = '<div style="padding:8px 12px;font-size:12px;color:#8b949e;border-bottom:1px solid #30363d;">Add to category:</div>';
+        categories.forEach(function(cat) {
+            const inCat = cat.comic_ids && cat.comic_ids.includes(comicId);
+            html += '<div class="context-menu-item" onclick="toggleComicInCategory(\'' + cat.id + '\', \'' + comicId + '\')">' +
+                (inCat ? '✓ ' : '') + escapeHtml(cat.name) + (inCat ? ' <span style=\"color:#8b949e;font-size:11px;\">(remove)</span>' : '') +
+                '</div>';
+        });
+        menu.innerHTML = html;
+        document.addEventListener('click', function hideMenu() {
+            menu.className = 'context-menu hidden';
+            document.removeEventListener('click', hideMenu);
+        });
+    }
+
+    async function toggleComicInCategory(catId, comicId) {
+        const cat = categories.find(c => c.id === catId);
+        if (!cat) return;
+        let ids = cat.comic_ids ? [...cat.comic_ids] : [];
+        if (ids.includes(comicId)) {
+            ids = ids.filter(id => id !== comicId);
+        } else {
+            ids.push(comicId);
+        }
+        const res = await fetch('/api/category/update/' + encodeURIComponent(catId), {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({comic_ids: ids})
+        });
+        if (res.ok) {
+            await loadCategories();
+            // If category detail is open, refresh it
+            if (currentCategory && currentCategory.id === catId) {
+                currentCategory = categories.find(c => c.id === catId);
+                renderCategoryDetail();
+            }
+        }
+    }
+
+    // ── View switching ────────────────────────────────────────────────────────
+
+    function switchView(view) {
+        currentView = view;
+        document.getElementById('libraryView').classList.toggle('hidden', view !== 'library');
+        document.getElementById('categoriesView').classList.toggle('hidden', view !== 'categories');
+        document.getElementById('navLibrary').classList.toggle('active', view === 'library');
+        document.getElementById('navCategories').classList.toggle('active', view === 'categories');
+        if (view === 'categories') {
+            loadCategories();
+        }
+    }
+
+    // ── Categories CRUD ───────────────────────────────────────────────────────
+
+    async function loadCategories() {
+        const res = await fetch('/api/categories');
+        if (res.ok) {
+            categories = await res.json();
+            if (currentView === 'categories') renderCategoriesGrid();
+        }
+    }
+
+    function renderCategoriesGrid() {
+        const grid = document.getElementById('categoriesGrid');
+        grid.innerHTML = '';
+        if (categories.length === 0) {
+            grid.innerHTML = '<p style="color:#8b949e;">No categories yet. Click "+ New Category" to get started.</p>';
+            return;
+        }
+        categories.forEach(function(cat) {
+            const card = document.createElement('div');
+            card.className = 'category-card';
+
+            const count = cat.comic_ids ? cat.comic_ids.length : 0;
+            const coverUrl = '/api/category/cover/' + encodeURIComponent(cat.id);
+
+            card.innerHTML = '<div style="position:relative;">' +
+                '<img class="category-cover" src="' + coverUrl + '" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'flex\'" alt="">' +
+                '<div class="category-cover-placeholder" style="display:none;">🗂</div>' +
+                '</div>' +
+                '<div class="category-info">' +
+                '<div class="category-name">' + escapeHtml(cat.name) + '</div>' +
+                '<div class="category-count">' + count + ' comic' + (count !== 1 ? 's' : '') + '</div>' +
+                '</div>';
+
+            card.onclick = function() { openCategoryDetail(cat.id); };
+            grid.appendChild(card);
+        });
+    }
+
+    function openCategoryModal(existingCat) {
+        currentCategory = existingCat || null;
+        document.getElementById('categoryModalTitle').textContent = existingCat ? 'Rename Category' : 'New Category';
+        document.getElementById('categoryName').value = existingCat ? existingCat.name : '';
+        document.getElementById('categoryMessage').innerHTML = '';
+        document.getElementById('categoryModal').classList.add('active');
+        setTimeout(function() { document.getElementById('categoryName').focus(); }, 100);
+    }
+
+    function closeCategoryModal() {
+        document.getElementById('categoryModal').classList.remove('active');
+    }
+
+    async function saveCategory() {
+        const name = document.getElementById('categoryName').value.trim();
+        if (!name) {
+            document.getElementById('categoryMessage').innerHTML = '<div class="message error">Please enter a name.</div>';
+            return;
+        }
+
+        if (currentCategory) {
+            // Rename
+            const res = await fetch('/api/category/update/' + encodeURIComponent(currentCategory.id), {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: name})
+            });
+            if (res.ok) {
+                closeCategoryModal();
+                await loadCategories();
+                if (document.getElementById('categoryDetailModal').classList.contains('active')) {
+                    currentCategory = categories.find(c => c.id === currentCategory.id);
+                    document.getElementById('categoryDetailName').textContent = currentCategory ? currentCategory.name : '';
+                }
+            }
+        } else {
+            const res = await fetch('/api/category/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: name, comic_ids: []})
+            });
+            if (res.ok) {
+                closeCategoryModal();
+                await loadCategories();
+            }
+        }
+    }
+
+    function openRenameCategoryModal() {
+        if (!currentCategory) return;
+        let tempCat = currentCategory;
+        closeCategoryDetail();
+        openCategoryModal(tempCat);
+    }
+
+    async function deleteCurrentCategory() {
+        if (!currentCategory) return;
+        if (!confirm('Delete category "' + currentCategory.name + '"? Comics will not be deleted.')) return;
+        const res = await fetch('/api/category/delete/' + encodeURIComponent(currentCategory.id), { method: 'DELETE' });
+        if (res.ok) {
+            closeCategoryDetail();
+            await loadCategories();
+        }
+    }
+
+    // ── Category Detail ───────────────────────────────────────────────────────
+
+    async function openCategoryDetail(catId) {
+        currentCategory = categories.find(c => c.id === catId);
+        if (!currentCategory) return;
+        document.getElementById('categoryDetailModal').classList.add('active');
+        renderCategoryDetail();
+    }
+
+    function closeCategoryDetail() {
+        document.getElementById('categoryDetailModal').classList.remove('active');
+        currentCategory = null;
+    }
+
+    function renderCategoryDetail() {
+        if (!currentCategory) return;
+        const cat = currentCategory;
+        document.getElementById('categoryDetailName').textContent = cat.name;
+        const count = cat.comic_ids ? cat.comic_ids.length : 0;
+        document.getElementById('categoryDetailCount').textContent = count + ' comic' + (count !== 1 ? 's' : '');
+
+        // Cover
+        const coverImg = document.getElementById('categoryDetailCover');
+        const coverPlaceholder = document.getElementById('categoryDetailCoverPlaceholder');
+        const coverUrl = '/api/category/cover/' + encodeURIComponent(cat.id) + '?t=' + Date.now();
+        coverImg.src = coverUrl;
+        coverImg.onload = function() { coverImg.style.display = ''; coverPlaceholder.style.display = 'none'; };
+        coverImg.onerror = function() { coverImg.style.display = 'none'; coverPlaceholder.style.display = 'flex'; };
+
+        // Comics in category
+        const grid = document.getElementById('categoryComicsGrid');
+        grid.innerHTML = '';
+        if (!cat.comic_ids || cat.comic_ids.length === 0) {
+            grid.innerHTML = '<p style="color:#8b949e;font-size:13px;">No comics yet. Add some from the library below.</p>';
+        } else {
+            cat.comic_ids.forEach(function(comicId) {
+                const comic = comics.find(c => c.id === comicId);
+                if (!comic) return;
+                const card = document.createElement('div');
+                card.className = 'comic-card';
+                card.style.position = 'relative';
+
+                const removeBtn = document.createElement('button');
+                removeBtn.textContent = '✕';
+                removeBtn.title = 'Remove from category';
+                removeBtn.style.cssText = 'position:absolute;top:6px;right:6px;z-index:10;background:#A55354;color:white;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:12px;line-height:1;';
+                removeBtn.onclick = function(e) {
+                    e.stopPropagation();
+                    toggleComicInCategory(cat.id, comicId);
+                };
+
+                const coverContainer = document.createElement('div');
+                coverContainer.className = 'comic-cover-container';
+                const cover = document.createElement('img');
+                cover.className = 'comic-cover';
+                cover.src = '/api/cover/' + encodeURIComponent(comic.id);
+                const fallback = document.createElement('div');
+                fallback.className = 'comic-cover-fallback hidden';
+                fallback.textContent = comic.filename;
+                cover.onerror = function() { cover.classList.add('hidden'); fallback.classList.remove('hidden'); };
+                coverContainer.appendChild(cover);
+                coverContainer.appendChild(fallback);
+
+                const info = document.createElement('div');
+                info.className = 'comic-info';
+                info.innerHTML = '<div class="comic-title">' + escapeHtml(comic.title || comic.filename) + '</div>' +
+                    '<div class="comic-meta"><div>' + escapeHtml(comic.artist) + '</div></div>';
+
+                card.appendChild(removeBtn);
+                card.appendChild(coverContainer);
+                card.appendChild(info);
+                card.onclick = function() { openReader(comic); };
+                grid.appendChild(card);
+            });
+        }
+
+        renderCategoryLibraryPicker();
+    }
+
+    function renderCategoryLibraryPicker() {
+        if (!currentCategory) return;
+        const search = document.getElementById('categoryComicSearch').value.toLowerCase();
+        const picker = document.getElementById('categoryLibraryPicker');
+        picker.innerHTML = '';
+        const inCat = new Set(currentCategory.comic_ids || []);
+        const filtered = comics.filter(function(c) {
+            if (inCat.has(c.id)) return false;
+            if (!search) return true;
+            return (c.title || c.filename || '').toLowerCase().includes(search) ||
+                   (c.artist || '').toLowerCase().includes(search);
+        });
+        if (filtered.length === 0) {
+            picker.innerHTML = '<div style="padding:12px;color:#8b949e;font-size:13px;">No comics to add.</div>';
+            return;
+        }
+        filtered.forEach(function(comic) {
+            const row = document.createElement('div');
+            row.className = 'context-menu-item';
+            row.style.cssText = 'display:flex;align-items:center;gap:10px;';
+            row.innerHTML = '<img src="/api/cover/' + encodeURIComponent(comic.id) + '" style="width:32px;height:45px;object-fit:cover;border-radius:3px;flex-shrink:0;" onerror="this.style.display=\'none\'">' +
+                '<span style="flex:1;font-size:13px;">' + escapeHtml(comic.title || comic.filename) + '</span>' +
+                '<span style="font-size:11px;color:#8b949e;">' + escapeHtml(comic.artist) + '</span>' +
+                '<button style="width:auto;padding:4px 10px;font-size:12px;margin:0;">Add</button>';
+            row.querySelector('button').onclick = function(e) {
+                e.stopPropagation();
+                toggleComicInCategory(currentCategory.id, comic.id);
+            };
+            picker.appendChild(row);
+        });
+    }
+
+    async function regenerateCategoryCover() {
+        if (!currentCategory) return;
+        const coverImg = document.getElementById('categoryDetailCover');
+        coverImg.src = '/api/category/cover/' + encodeURIComponent(currentCategory.id) + '?regen=1&t=' + Date.now();
+        // Also refresh grid card
+        await loadCategories();
+    }
+
+    async function uploadCategoryCover(input) {
+        if (!currentCategory || !input.files[0]) return;
+        const formData = new FormData();
+        formData.append('cover', input.files[0]);
+        const res = await fetch('/api/category/upload-cover/' + encodeURIComponent(currentCategory.id), {
+            method: 'POST',
+            body: formData
+        });
+        if (res.ok) {
+            const updated = await res.json();
+            currentCategory = updated;
+            const idx = categories.findIndex(c => c.id === updated.id);
+            if (idx !== -1) categories[idx] = updated;
+            renderCategoryDetail();
+            renderCategoriesGrid();
+        }
+        input.value = '';
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
     function openTagModal(comicId) {
@@ -1806,6 +2759,10 @@
     }
 
     document.addEventListener('keydown', function(e) {
+        if (document.getElementById('confirmModal').classList.contains('active')) {
+            if (e.key === 'Enter') { confirmDelete(); return; }
+            if (e.key === 'Escape') { closeConfirmModal(); return; }
+        }
         if (document.getElementById('passwordModal').classList.contains('active')) {
             if (e.key === 'Enter') {
                 submitPassword();
@@ -1854,19 +2811,29 @@
         }
     }
 
-    async function deleteComic() {
-        const id = document.getElementById('deleteId').value.trim();
-        if (!id) {
-            showMessage('Please enter a comic ID', 'error');
-            return;
-        }
-        if (!confirm('Delete comic ID: ' + id + '?')) return;
+    // Confirm delete modal
+    let pendingDeleteId = null;
+
+    function deleteComic(id, name) {
+        pendingDeleteId = id;
+        document.getElementById('confirmComicName').textContent = '"' + name + '"';
+        document.getElementById('confirmModal').classList.add('active');
+    }
+
+    function closeConfirmModal() {
+        document.getElementById('confirmModal').classList.remove('active');
+        pendingDeleteId = null;
+    }
+
+    async function confirmDelete() {
+        if (!pendingDeleteId) return;
+        const id = pendingDeleteId;
+        closeConfirmModal();
         try {
-            const res = await fetch('/api/admin/delete-comic/' + encodeURIComponent(id), {method: 'DELETE'});
+            const res = await fetch('/api/delete-comic/' + encodeURIComponent(id), {method: 'DELETE'});
             if (res.ok) {
-                loadComics();
                 showMessage('Comic deleted!', 'success');
-                document.getElementById('deleteId').value = '';
+                loadComics();
             } else {
                 showMessage('Delete failed: ' + (await res.text()), 'error');
             }
@@ -1874,6 +2841,110 @@
             showMessage('Network error: ' + err.message, 'error');
         }
     }
+
+    // Admin delete by ID field
+    function adminDeleteComic() {
+        const id = document.getElementById('deleteId').value.trim();
+        if (!id) { showMessage('Please enter a comic ID', 'error'); return; }
+        deleteComic(id, id);
+        document.getElementById('deleteId').value = '';
+    }
+
+    // Share Link UI
+    let sharingComicId = null;
+
+    async function openShareModal(comicId) {
+        sharingComicId = comicId;
+        const comic = comics.find(c => c.id === comicId);
+        document.getElementById('shareComicName').textContent = comic ? (comic.title || comic.filename) : comicId;
+        document.getElementById('newShareResult').className = 'hidden';
+        document.getElementById('shareType').value = 'permanent';
+        document.getElementById('shareExpiryGroup').style.display = 'none';
+        document.getElementById('sharePassword').value = '';
+        // Only show the share password option for encrypted comics
+        document.getElementById('sharePasswordGroup').style.display = (comic && comic.encrypted) ? 'block' : 'none';
+        document.getElementById('shareModal').classList.add('active');
+        await refreshShareList();
+    }
+
+    function closeShareModal() {
+        document.getElementById('shareModal').classList.remove('active');
+        sharingComicId = null;
+    }
+
+    function toggleShareExpiry() {
+        const type = document.getElementById('shareType').value;
+        document.getElementById('shareExpiryGroup').style.display = type === 'timed' ? 'block' : 'none';
+    }
+
+    async function createShareLink() {
+        if (!sharingComicId) return;
+        const type = document.getElementById('shareType').value;
+        const body = { permanent: type === 'permanent' };
+        if (type === 'timed') {
+            const val = document.getElementById('shareExpiry').value;
+            if (!val) { showMessage('Please pick an expiry date', 'error'); return; }
+            body.expires_at = new Date(val).toISOString();
+        }
+        const pw = document.getElementById('sharePassword').value;
+        if (pw) body.share_password = pw;
+
+        const res = await fetch('/api/share/create/' + encodeURIComponent(sharingComicId), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        if (!res.ok) { showMessage('Failed to create share link', 'error'); return; }
+        const data = await res.json();
+        const fullUrl = window.location.origin + data.url;
+        const urlDiv = document.getElementById('newShareUrl');
+        urlDiv.textContent = fullUrl;
+        urlDiv.dataset.url = fullUrl;
+        document.getElementById('newShareResult').className = '';
+        const hint = document.getElementById('newSharePasswordHint');
+        hint.style.display = data.has_share_password ? 'block' : 'none';
+        await refreshShareList();
+    }
+
+    function copyShareUrl(el) {
+        const url = el.dataset.url || el.textContent;
+        navigator.clipboard.writeText(url).then(() => showMessage('URL copied!', 'success'));
+    }
+
+    async function refreshShareList() {
+        const res = await fetch('/api/share/list');
+        if (!res.ok) return;
+        const links = await res.json();
+        const container = document.getElementById('shareList');
+        container.innerHTML = '';
+        const comicLinks = (links || []).filter(l => l.comic_id === sharingComicId);
+        if (comicLinks.length === 0) {
+            container.innerHTML = '<div style="color:#8b949e;font-size:13px;">No active share links for this comic.</div>';
+            return;
+        }
+        comicLinks.forEach(function(sl) {
+            const fullUrl = window.location.origin + '/s/' + sl.id;
+            const row = document.createElement('div');
+            row.className = 'share-link-row';
+            const expiry = sl.permanent
+                ? '<span class="share-expiry">Permanent</span>'
+                : '<span class="share-expiry">Expires: ' + new Date(sl.expires_at).toLocaleString() + '</span>';
+            const pwBadge = sl.has_share_password ? '<span style="font-size:11px;color:#8b949e;margin-left:6px;">🔒 password protected</span>' : '';
+            row.innerHTML =
+                '<span class="share-link-url" data-url="' + fullUrl + '" onclick="copyShareUrl(this)" title="Click to copy">' + fullUrl + '</span>' +
+                expiry + pwBadge +
+                '<button class="share-del-btn" onclick="deleteShareLink(\'' + sl.id + '\')">Delete</button>';
+            container.appendChild(row);
+        });
+    }
+
+    async function deleteShareLink(token) {
+        const res = await fetch('/api/share/delete/' + encodeURIComponent(token), {method: 'DELETE'});
+        if (res.ok) { await refreshShareList(); showMessage('Share link deleted', 'success'); }
+        else showMessage('Failed to delete share link', 'error');
+    }
+
+
 
     let pendingPasswordComic = null;
 
@@ -2027,5 +3098,20 @@
         }
     });
     </script>
+    <!-- Confirm Delete Modal -->
+    <div id="confirmModal">
+        <div class="confirm-box">
+            <div class="confirm-title">Delete Comic</div>
+            <div class="confirm-body">
+                Are you sure you want to delete <span class="confirm-comic-name" id="confirmComicName"></span>?
+                <div class="confirm-warning">This action cannot be undone.</div>
+            </div>
+            <div class="confirm-buttons">
+                <button class="confirm-cancel-btn" onclick="closeConfirmModal()">Cancel</button>
+                <button class="confirm-delete-btn" onclick="confirmDelete()">Delete</button>
+            </div>
+        </div>
+    </div>
+
 </body>
 </html>

@@ -7,6 +7,7 @@ scripts-go
 Containerfile
 Containerfile.build
 binaries
+bin
 README.md
 xml-template
 cache

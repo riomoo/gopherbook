@@ -42,14 +42,19 @@ It is designed for people who want full control over their digital comic collect
   - First registered user becomes admin
   - Admin can disable new registrations
   - Admin can delete any comic
-- No external database – everything stored in simple JSON files
+- **Single unified bbolt database** – replaces scattered JSON files for better performance and reliability
+- **Easy comic deletion** – quick remove comics from your library with a single click
+- **Shareable links** – generate and share direct links to individual comics
+- **Pagination support** – efficient browsing of large comic collections
+- **Collections** – organize comics into custom collections for better library management
+- No external dependencies – everything self-contained in a single binary
 - Single static Go binary + file storage – easy to deploy
 
 ## Installation / Running
 
 ### Prerequisites
 [![Go](https://img.shields.io/badge/go-%2300ADD8.svg?style=for-the-badge&logo=go&logoColor=white)](https://golang.org/dl/)
-- Go 1.25.2+ (only needed to build)
+- Go 1.26.0+ (only needed to build)
 - Or just download a pre-built binary from Releases (when available)
 
 ### Quick start (from source)
@@ -88,22 +93,19 @@ Then open http://localhost:12010 in your browser.
 ## Directory layout after first login
 ```
 ./library/username/                ← your comics (organized or Unorganized/)
-./library/username/comics.json     ← metadata index
-./library/username/tags.json       ← tag definitions & counts
-./library/username/passwords.json  ← encrypted password vault (AES)
 ./cache/covers/username/           ← generated cover thumbnails
 ./watch/username/                  ← watch folder for bulk imports (auto-scanned)
-./etc/users.json                   ← user accounts (bcrypt hashes)
-./etc/admin.json                   ← admin settings (registration toggle)
+./data/gopherbook.db               ← unified bbolt database (users, comics, tags, passwords, collections)
 ```
 
 ## Environment Variables
-Can be used to set where everything is stored with:
+Can be used to configure storage locations and server settings:
 ```
 GOPHERBOOK_LIBRARY=$HOME/.config/gopherbook/library
 GOPHERBOOK_CACHE=$HOME/.config/gopherbook/covers
 GOPHERBOOK_ETC=$HOME/.config/gopherbook/etc
 GOPHERBOOK_WATCH=$HOME/.config/gopherbook/watch
+GBKPORT=8080                                           # Set the port the server listens on (default: 8080)
 ```
 
 ## Watch folder for bulk imports

@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="${1:-v1.3.001}"
+VERSION="${1:-v2.0.0}"
 RELEASE_DIR="./releases"
 BINARIES_DIR="./binaries"
 
@@ -29,7 +29,7 @@ Gopherbook - Comic Book Reader (CBZ/CBT)
 Quick Start:
 ------------
 1. Run the gopherbook executable
-2. Open your browser to http://localhost:8080
+2. Open your browser to http://localhost:8112
 3. Register a new user account
 4. Upload your CBZ/CBT comic files
 
@@ -42,6 +42,13 @@ Features:
 • Auto-organize by artist and story arc
 • Watch folder for automatic imports
 • Multi-user support with admin controls
+• Delete comics easily by right clicking or clicking the trash can icon
+• Share comics easily by right-clicking comic
+     - And if the comic is encrypted? You can give a smaller password for
+       the person you are sharing the comic with.
+• You can make categories, generate or upload covers for those categories
+• NO MORE JSON FILES just one bbolt DB
+• 
 
 Watch Folder:
 -------------
@@ -56,10 +63,14 @@ Directory Structure:
 ./watch/       - Watch folders for auto-import
 
 Default Port: 8080
+But I set it to: 8112
+For your convenience in the bat,ps1,and bash files
+Can set port yourself with environment variable:
+GBKPORT=8112
 
 For more information, visit:
 https://github.com/riomoo/gopherbook
-https://codeberg.org/riomoo/gofudge
+https://codeberg.org/riomoo/gopherbook
 https://gitgud.io/riomoo/gopherbook
 
 EOF
@@ -80,10 +91,10 @@ cp /tmp/README.txt "$LINUX_DIR/"
 cat > "$LINUX_DIR/run.sh" << 'EOF'
 #!/bin/bash
 echo "Starting Gopherbook..."
-echo "Open your browser to: http://localhost:8080"
+echo "Open your browser to: http://localhost:8112"
 echo "Press Ctrl+C to stop"
 echo ""
-./gopherbook
+GBKPORT=8112 ./gopherbook
 EOF
 chmod +x "$LINUX_DIR/run.sh"
 
@@ -112,9 +123,10 @@ unix2dos < /tmp/README.txt > "$WINDOWS_DIR/README.txt" 2>/dev/null || cp /tmp/RE
 cat > "$WINDOWS_DIR/run.bat" << 'EOF'
 @echo off
 echo Starting Gopherbook...
-echo Open your browser to: http://localhost:8080
+echo Open your browser to: http://localhost:8112
 echo Press Ctrl+C to stop
 echo.
+set GBKPORT=8112
 gopherbook.exe
 pause
 EOF
@@ -122,9 +134,10 @@ EOF
 # Create PowerShell script
 cat > "$WINDOWS_DIR/run.ps1" << 'EOF'
 Write-Host "Starting Gopherbook..." -ForegroundColor Green
-Write-Host "Open your browser to: http://localhost:8080" -ForegroundColor Cyan
+Write-Host "Open your browser to: http://localhost:8112" -ForegroundColor Cyan
 Write-Host "Press Ctrl+C to stop" -ForegroundColor Yellow
 Write-Host ""
+$env:GBKPORT = 8112
 .\gopherbook.exe
 EOF
 

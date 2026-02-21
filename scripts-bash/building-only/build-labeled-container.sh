@@ -2,7 +2,7 @@
 
 IMAGE_NAME="localhost/gopherbook:latest"
 CONTAINER_NAME="gopherbook"
-VERSION="1.3.000"
+VERSION="2.0.0"
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 VCS_REF=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 

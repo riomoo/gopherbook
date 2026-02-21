@@ -1,6 +1,6 @@
 module gobook
 
-go 1.25.2
+go 1.26.0
 
 require (
 	github.com/gen2brain/avif v0.4.4
@@ -12,4 +12,6 @@ require (
 require (
 	github.com/ebitengine/purego v0.8.3 // indirect
 	github.com/tetratelabs/wazero v1.9.0 // indirect
+	go.etcd.io/bbolt v1.4.3 // indirect
+	golang.org/x/sys v0.37.0 // indirect
 )
