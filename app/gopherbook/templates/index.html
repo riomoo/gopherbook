@@ -280,7 +280,7 @@
             font-weight: 500;
             cursor: pointer;
             transition: all 0.2s ease;
-            width: 43px;
+            width: 45px;
             height: 22px;
             text-align: center;
             line-height: 18px;
@@ -1962,7 +1962,7 @@
         }
     }
 
-    // ── View switching ────────────────────────────────────────────────────────
+    // View switching ────────────────────────────────────────────────────────
 
     function switchView(view) {
         currentView = view;
@@ -1975,7 +1975,7 @@
         }
     }
 
-    // ── Categories CRUD ───────────────────────────────────────────────────────
+    // Categories CRUD ───────────────────────────────────────────────────────
 
     async function loadCategories() {
         const res = await fetch('/api/categories');
@@ -2078,7 +2078,7 @@
         }
     }
 
-    // ── Category Detail ───────────────────────────────────────────────────────
+    // Category Detail ───────────────────────────────────────────────────────
 
     async function openCategoryDetail(catId) {
         currentCategory = categories.find(c => c.id === catId);
@@ -2906,10 +2906,51 @@
         await refreshShareList();
     }
 
-    function copyShareUrl(el) {
-        const url = el.dataset.url || el.textContent;
-        navigator.clipboard.writeText(url).then(() => showMessage('URL copied!', 'success'));
-    }
+	function copyShareUrl(el) {
+	    const url = el.dataset.url || el.textContent.trim();
+
+	    // 1. Try modern clipboard API first (works on HTTPS + localhost)
+	    if (navigator.clipboard && navigator.clipboard.writeText) {
+		navigator.clipboard.writeText(url)
+		    .then(() => showMessage('URL copied to clipboard!', 'success'))
+		    .catch(err => {
+			console.warn('Clipboard API failed:', err);
+			fallbackCopy(url);
+		    });
+		return;
+	    }
+
+	    fallbackCopy(url);
+	}
+
+	function fallbackCopy(text) {
+	    const textarea = document.createElement('textarea');
+	    textarea.value = text;
+
+	    textarea.style.position = 'fixed';
+	    textarea.style.opacity = '0';
+	    textarea.style.left = '-9999px';
+	    textarea.style.top = '0';
+
+	    document.body.appendChild(textarea);
+	    textarea.focus();
+	    textarea.select();
+
+	    try {
+		const successful = document.execCommand('copy');
+		if (successful) {
+		    showMessage('URL copied to clipboard!', 'success');
+		} else {
+		    showMessage('Could not copy — please select and copy manually', 'error');
+		}
+	    } catch (err) {
+		console.error('Fallback copy failed:', err);
+		showMessage('Could not copy — please select and copy manually', 'error');
+	    }
+
+	    // Clean up
+	    document.body.removeChild(textarea);
+	}
 
     async function refreshShareList() {
         const res = await fetch('/api/share/list');

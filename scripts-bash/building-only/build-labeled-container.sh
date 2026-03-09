@@ -1,8 +1,8 @@
 #!/bin/bash
 
-IMAGE_NAME="localhost/gopherbook:latest"
+IMAGE_NAME="localhost/gopherbook:2.0.125"
 CONTAINER_NAME="gopherbook"
-VERSION="2.0.0"
+VERSION="2.0.125"
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 VCS_REF=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
