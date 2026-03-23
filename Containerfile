@@ -20,7 +20,10 @@ RUN go mod download
 
 COPY . .
 
-# Build with CGO and increased WASM memory limits
+# musl_compat.c (in app/gopherbook/) provides stub implementations of glibc
+# _FORTIFY_SOURCE symbols (__memcpy_chk, __snprintf_chk, etc.) that musl lacks.
+# This satisfies the linker when statically linking vegidio/avif-go's prebuilt
+# glibc-compiled .a files without needing to change the builder base image.
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
     -a \
     -ldflags="-s -w -linkmode external -extldflags '-static' -X main.GOMEMLIMIT=512MiB -X runtime.defaultGOGC=50" \
@@ -29,7 +32,7 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
 RUN upx --best --ultra-brute bin/main
 RUN chmod +x bin/main
 
-FROM git.jester-designs.com/riomoo/alisterbase:1.0.0
+FROM git.jester-designs.com/riomoo/alisterbase:latest
 
 WORKDIR /app
 

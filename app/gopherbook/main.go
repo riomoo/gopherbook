@@ -27,12 +27,13 @@ import (
 	"runtime"
 	"runtime/debug"
 	"image"
+	"image/draw"
 	"image/jpeg"
 	_ "image/gif"
 	_ "image/png"
 
 	"github.com/nfnt/resize"
-	_ "github.com/gen2brain/avif"
+	_ "github.com/vegidio/avif-go"
 	"golang.org/x/crypto/bcrypt"
 	yzip "github.com/yeka/zip"
 	bolt "go.etcd.io/bbolt"
@@ -151,7 +152,7 @@ var (
 	shareLinksMutex         sync.RWMutex
 	shareUnlockSessions     = make(map[string]shareUnlockSession) // key=(shareToken+":"+nonce)
 	shareUnlockSessionsMutex sync.RWMutex
-	coverGenSemaphore       = make(chan struct{}, 1) // Only ONE cover generation at a time
+	coverGenSemaphore       chan struct{} // sized in main() based on CPU count
 	categories           = make(map[string]Category)
 	categoriesMutex      sync.RWMutex
 	comicsMutex          sync.RWMutex
@@ -168,6 +169,11 @@ var (
 	watchFolders = make(map[string]*time.Timer)
 	watchMutex   sync.RWMutex
 	watchPath    = "./watch"
+
+	// pageIndexCache stores the sorted list of image filenames per comic ID,
+	// so serveComicPage and handleComicPages don't re-scan the ZIP on every request.
+	pageIndexCache      = make(map[string][]string)
+	pageIndexCacheMutex sync.RWMutex
 )
 
 func main() {
@@ -175,6 +181,14 @@ func main() {
 	os.MkdirAll(cachePath, 0755)
 	os.MkdirAll(etcPath, 0755)
 	os.MkdirAll(watchPath, 0755)
+
+	// Scale cover generation concurrency to CPU count, capped at 4
+	coverWorkers := runtime.NumCPU()
+	if coverWorkers > 4 {
+		coverWorkers = 4
+	}
+	coverGenSemaphore = make(chan struct{}, coverWorkers)
+	log.Printf("Cover generation semaphore width: %d", coverWorkers)
 
 	var err error
 	db, err = bolt.Open(filepath.Join(etcPath, "gopherbooks.db"), 0600, &bolt.Options{Timeout: 1 * time.Second})
@@ -577,10 +591,19 @@ func startWatchingUser(username string) {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
+		var lastModTime time.Time
 		log.Printf("Started watching folder for user: %s", username)
 
 		for range ticker.C {
-			processWatchFolder(username, userWatchPath)
+			info, err := os.Stat(userWatchPath)
+			if err != nil {
+				continue
+			}
+			// Only process if the directory's own mtime changed (new file dropped in)
+			if info.ModTime().After(lastModTime) {
+				lastModTime = info.ModTime()
+				processWatchFolder(username, userWatchPath)
+			}
 		}
 	}()
 }
@@ -851,6 +874,10 @@ func handleDeleteComic(w http.ResponseWriter, r *http.Request) {
 		}
 		delete(comics, decodedID)
 		debounceSave()
+		// Evict page index cache
+		pageIndexCacheMutex.Lock()
+		delete(pageIndexCache, decodedID)
+		pageIndexCacheMutex.Unlock()
 	}
 	comicsMutex.Unlock()
 	w.Header().Set("Content-Type", "application/json")
@@ -878,6 +905,10 @@ func handleUserDeleteComic(w http.ResponseWriter, r *http.Request) {
 	// Also remove cached cover
 	cacheFile := filepath.Join(cachePath, comic.ID+".jpg")
 	os.Remove(cacheFile)
+	// Evict page index cache
+	pageIndexCacheMutex.Lock()
+	delete(pageIndexCache, decodedID)
+	pageIndexCacheMutex.Unlock()
 	for _, tag := range comic.Tags {
 		updateTagCount(tag, -1)
 	}
@@ -923,6 +954,7 @@ func handleCover(w http.ResponseWriter, r *http.Request) {
 
 	// Check if cache exists
 	if _, err := os.Stat(cacheFile); err == nil {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
 		http.ServeFile(w, r, cacheFile)
 		return
 	}
@@ -997,6 +1029,7 @@ func handleCover(w http.ResponseWriter, r *http.Request) {
 
 	// Serve the newly generated cache
 	if _, err := os.Stat(cacheFile); err == nil {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
 		http.ServeFile(w, r, cacheFile)
 		return
 	}
@@ -1197,6 +1230,13 @@ func validateCBTPassword(filePath, password string) bool {
 
 // Add this function to generate cover from CBT
 func generateCBTCover(comic *Comic, cacheFile string) error {
+	oldGC := debug.SetGCPercent(10)
+	defer func() {
+		debug.SetGCPercent(oldGC)
+		runtime.GC()
+		debug.FreeOSMemory()
+	}()
+
 	var tr *tar.Reader
 	var err error
 	var closeFile func()
@@ -1250,7 +1290,6 @@ func generateCBTCover(comic *Comic, cacheFile string) error {
 			if err != nil {
 				return err
 			}
-			// imageExt = ext
 			break
 		}
 	}
@@ -1522,20 +1561,23 @@ func generateCoverCacheLazy(comic *Comic, cacheFile string) error {
 	}
 	defer rc.Close()
 
-	// NEW: First decode config to check dimensions
+	// First decode config to check dimensions.
+	// NOTE: AVIF (and some other formats) do not support image.DecodeConfig —
+	// if it fails, fall back to the disk-based safe path immediately.
 	config, format, err := image.DecodeConfig(rc)
-	if err == nil {
-		pixelCount := config.Width * config.Height
-		log.Printf("Cover dimensions: %dx%d (%d pixels), format: %s", config.Width, config.Height, pixelCount, format)
-
-		// If image is huge (>20 megapixels), use direct resize
-		if pixelCount > 20*1000*1000 {
-			rc.Close()
-			log.Printf("Image too large (%d megapixels), using direct resize", pixelCount/1000000)
-			return resizeCoverDirectly(comic, coverFile, cacheFile, 300)
-		}
-	}
 	rc.Close()
+	if err != nil {
+		ext := strings.ToLower(filepath.Ext(coverFile.Name))
+		log.Printf("DecodeConfig failed for %s (%v), routing to direct resize", ext, err)
+		return resizeCoverDirectly(comic, coverFile, cacheFile, 300)
+	}
+	pixelCount := config.Width * config.Height
+	log.Printf("Cover dimensions: %dx%d (%d pixels), format: %s", config.Width, config.Height, pixelCount, format)
+	// If image is huge (>20 megapixels), use direct resize
+	if pixelCount > 20*1000*1000 {
+		log.Printf("Image too large (%d megapixels), using direct resize", pixelCount/1000000)
+		return resizeCoverDirectly(comic, coverFile, cacheFile, 300)
+	}
 
 	// Reopen for actual reading
 	rc, err = coverFile.Open()
@@ -1597,14 +1639,18 @@ func resizeCoverDirectly(comic *Comic, coverFile *yzip.File, cacheFile string, m
 	if err != nil {
 		return err
 	}
+	tmp.Close()
 
 	// 2. Decode from Disk-based reader
-	tmp.Seek(0, 0)
-	img, _, err := image.Decode(tmp)
+	tmpF, err := os.Open(tmpPath)
 	if err != nil {
 		return err
 	}
-	tmp.Close() // Close early
+	img, _, err := image.Decode(tmpF)
+	tmpF.Close()
+	if err != nil {
+		return err
+	}
 
 	// 3. Resize logic
 	bounds := img.Bounds()
@@ -2338,6 +2384,42 @@ func handleComicFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, comic.FilePath)
 }
 
+// getComicPageIndex returns the sorted list of image filenames for a CBZ comic,
+// building and caching it on the first call. Subsequent calls return from cache.
+func getComicPageIndex(comic *Comic) ([]string, error) {
+	pageIndexCacheMutex.RLock()
+	if index, ok := pageIndexCache[comic.ID]; ok {
+		pageIndexCacheMutex.RUnlock()
+		return index, nil
+	}
+	pageIndexCacheMutex.RUnlock()
+
+	yr, err := yzip.OpenReader(comic.FilePath)
+	if err != nil {
+		return nil, err
+	}
+	defer yr.Close()
+
+	var names []string
+	for _, f := range yr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".avif" ||
+			ext == ".jxl" || ext == ".jp2" || ext == ".webp" || ext == ".gif" || ext == ".bmp" {
+			names = append(names, f.Name)
+		}
+	}
+	sort.Strings(names)
+
+	pageIndexCacheMutex.Lock()
+	pageIndexCache[comic.ID] = names
+	pageIndexCacheMutex.Unlock()
+
+	return names, nil
+}
+
 func serveComicPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum string) {
 	// Handle CBT files
 	if comic.FileType == ".cbt" {
@@ -2371,28 +2453,32 @@ func serveComicPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum
 	}
 	defer yr.Close()
 
-	var imageFiles []*yzip.File
-	for _, f := range yr.File {
-		if f.FileInfo().IsDir() {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".avif" ||
-			ext == ".jxl" || ext == ".jp2" || ext == ".webp" || ext == ".gif" || ext == ".bmp" {
-			imageFiles = append(imageFiles, f)
-		}
+	// Use cached page index to avoid re-scanning the ZIP on every page request
+	pageNames, err := getComicPageIndex(&comic)
+	if err != nil {
+		http.Error(w, "Error reading comic index", http.StatusInternalServerError)
+		return
 	}
 
-	sort.Slice(imageFiles, func(i, j int) bool {
-		return imageFiles[i].Name < imageFiles[j].Name
-	})
-
-	if pageIdx < 0 || pageIdx >= len(imageFiles) {
+	if pageIdx < 0 || pageIdx >= len(pageNames) {
 		http.Error(w, "Page not found", http.StatusNotFound)
 		return
 	}
 
-	targetFile := imageFiles[pageIdx]
+	targetName := pageNames[pageIdx]
+
+	// Find the actual zip entry by name
+	var targetFile *yzip.File
+	for _, f := range yr.File {
+		if f.Name == targetName {
+			targetFile = f
+			break
+		}
+	}
+	if targetFile == nil {
+		http.Error(w, "Page not found", http.StatusNotFound)
+		return
+	}
 
 	if targetFile.IsEncrypted() {
 		if hasPassword {
@@ -2444,7 +2530,7 @@ func handleComicPages(w http.ResponseWriter, r *http.Request) {
 
 	// Check if we have password
 	passwordsMutex.RLock()
-	password, hasPassword := comicPasswords[comic.ID]
+	_, hasPassword := comicPasswords[comic.ID]
 	passwordsMutex.RUnlock()
 
 	if comic.Encrypted && !hasPassword {
@@ -2490,32 +2576,12 @@ func handleComicPages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	yr, err := yzip.OpenReader(comic.FilePath)
+	// Use cached page index — avoids reopening and re-scanning the ZIP
+	imageFiles, err := getComicPageIndex(&comic)
 	if err != nil {
 		http.Error(w, "Error reading comic", http.StatusInternalServerError)
 		return
 	}
-	defer yr.Close()
-
-	var imageFiles []string
-	for _, f := range yr.File {
-		if f.FileInfo().IsDir() {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".avif" ||
-			ext == ".jxl" || ext == ".jp2" || ext == ".webp" || ext == ".gif" || ext == ".bmp" {
-
-			// Set password if encrypted
-			if f.IsEncrypted() && hasPassword {
-				f.SetPassword(password)
-			}
-
-			imageFiles = append(imageFiles, f.Name)
-		}
-	}
-
-	sort.Strings(imageFiles)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -2846,7 +2912,7 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r)
 	}
 }
-// ── bbolt helpers ──────────────────────────────────────────────────────────
+// bbolt helpers
 
 // userBucket returns the per-user bucket name for a given data type.
 func userBucket(kind, username string) []byte {
@@ -2863,7 +2929,7 @@ func ensureUserBuckets(tx *bolt.Tx, username string) error {
 	return nil
 }
 
-// ── users / admin ──────────────────────────────────────────────────────────
+// users / admin
 
 func loadUsers() {
 	db.View(func(tx *bolt.Tx) error {
@@ -2913,7 +2979,7 @@ func saveAdminConfig() {
 	})
 }
 
-// ── comics ─────────────────────────────────────────────────────────────────
+// comics
 
 func saveComics() {
 	comicsMutex.RLock()
@@ -2957,7 +3023,7 @@ func loadComics() {
 	})
 }
 
-// ── tags ───────────────────────────────────────────────────────────────────
+// tags
 
 func saveTags() {
 	tagsMutex.RLock()
@@ -3000,7 +3066,7 @@ func loadTags() {
 	})
 }
 
-// ── passwords ──────────────────────────────────────────────────────────────
+// passwords
 
 func loadPasswordsWithKey(key []byte) {
 	db.View(func(tx *bolt.Tx) error {
@@ -3054,7 +3120,7 @@ func savePasswords() {
 	})
 }
 
-// ── share links ────────────────────────────────────────────────────────────
+// share links
 
 func loadShareLinks(username string) {
 	db.View(func(tx *bolt.Tx) error {
@@ -4007,6 +4073,7 @@ func handleCategorycover(w http.ResponseWriter, r *http.Request) {
 	// Uploaded custom cover
 	if cat.CoverType == "upload" && cat.CoverPath != "" {
 		if _, err := os.Stat(cat.CoverPath); err == nil {
+			w.Header().Set("Cache-Control", "public, max-age=86400")
 			http.ServeFile(w, r, cat.CoverPath)
 			return
 		}
@@ -4021,6 +4088,7 @@ func handleCategorycover(w http.ResponseWriter, r *http.Request) {
 	regen := r.URL.Query().Get("regen") == "1"
 	if !regen {
 		if _, err := os.Stat(cacheFile); err == nil {
+			w.Header().Set("Cache-Control", "public, max-age=86400")
 			http.ServeFile(w, r, cacheFile)
 			return
 		}
@@ -4091,12 +4159,8 @@ func handleCategorycover(w http.ResponseWriter, r *http.Request) {
 		row := i / cols
 		offsetX := col * tileW
 		offsetY := row * tileH
-		bounds := resized.Bounds()
-		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			for x := bounds.Min.X; x < bounds.Max.X; x++ {
-				collage.Set(offsetX+x-bounds.Min.X, offsetY+y-bounds.Min.Y, resized.At(x, y))
-			}
-		}
+		destRect := image.Rect(offsetX, offsetY, offsetX+resized.Bounds().Dx(), offsetY+resized.Bounds().Dy())
+		draw.Draw(collage, destRect, resized, resized.Bounds().Min, draw.Src)
 	}
 
 	f, err := os.Create(cacheFile)
@@ -4107,6 +4171,7 @@ func handleCategorycover(w http.ResponseWriter, r *http.Request) {
 	jpeg.Encode(f, collage, &jpeg.Options{Quality: 85})
 	f.Close()
 
+	w.Header().Set("Cache-Control", "public, max-age=86400")
 	http.ServeFile(w, r, cacheFile)
 }
 
