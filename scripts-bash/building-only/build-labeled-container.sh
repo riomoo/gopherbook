@@ -1,8 +1,8 @@
 #!/bin/bash
 
-IMAGE_NAME="localhost/gopherbook:2.0.125"
+IMAGE_NAME="localhost/gopherbook:2.1.1"
 CONTAINER_NAME="gopherbook"
-VERSION="2.0.125"
+VERSION="2.1.1"
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 VCS_REF=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -55,7 +55,10 @@ echo "Starting new container from image: $IMAGE_NAME..."
 # IMPROVED: Better memory settings and limits
 podman run -d --name "$CONTAINER_NAME" \
   --memory=512m \
+  --memory-swap=512m \
   --restart unless-stopped \
+  -e GOMEMLIMIT=480MiB \
+  -e GOMAXPROCS=2 \
   -p 12010:8080 \
   -v ./library:/app/library \
   -v ./cache:/app/cache \
@@ -73,5 +76,5 @@ podman image prune --force
 
 echo "Update and cleanup complete!"
 echo "Container is running with memory limit: 512MB"
-echo "Go memory limit (GOMEMLIMIT): 512MiB"
-echo "Aggressive GC enabled (GOGC=50)"
+echo "Container is running with memory swap: 512MB"
+echo "Go memory limit (GOMEMLIMIT): 480MiB"

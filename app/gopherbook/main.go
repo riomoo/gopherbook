@@ -204,6 +204,11 @@ func main() {
 	})
 
 	loadUsers()
+	// Load share links for all known users at startup so public share URLs
+	// work even before the owner logs in.
+	for username := range users {
+		loadShareLinks(username)
+	}
 	initWatchFolders()
 	// Create static sub-filesystem once
 	staticSubFS, err := fs.Sub(staticFS, "static")
@@ -3602,8 +3607,15 @@ func handleSharedComic(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		// No share-level password — use the in-memory plaintext directly
+		// sl.ComicPassword is never persisted (json:"-"), so after a server
+		// restart it will be empty. For encrypted comics, fall back to the
+		// owner's in-memory password map (populated when they log in).
 		comicPassword = sl.ComicPassword
+		if comicPassword == "" && sl.ComicEncrypted {
+			passwordsMutex.RLock()
+			comicPassword = comicPasswords[sl.ComicID]
+			passwordsMutex.RUnlock()
+		}
 	}
 
 	// Build a lightweight Comic struct from the share link's snapshotted data.
@@ -3796,13 +3808,21 @@ body{background:#1b1e2c;color:#bfbcb7;font-family:system-ui,sans-serif;min-heigh
 header{background:#395E62;padding:10px 20px;display:flex;align-items:center;gap:12px}
 header h1{color:#1b1e2c;font-size:20px}
 .sub{font-size:13px;color:#1b1e2c;opacity:.8}
-.controls{background:#1b1e2c;border-bottom:1px solid #395E62;padding:10px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.btn{background:#395E62;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:14px}
+.controls{background:#1b1e2c;border-bottom:1px solid #395E62;padding:8px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{background:#395E62;color:#fff;border:none;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;white-space:nowrap}
 .btn:hover{background:#446B6E}
+.btn.active{background:#64A9AD}
 .btn:disabled{opacity:.4;cursor:not-allowed}
-.page-info{color:#bfbcb7;font-size:14px}
-.reader{flex:1;display:flex;justify-content:center;align-items:center;overflow:hidden;background:#111}
-#comicImage{max-width:100%;max-height:calc(100vh - 100px);object-fit:contain}
+.page-info{color:#bfbcb7;font-size:13px;white-space:nowrap}
+.reader{flex:1;display:flex;justify-content:center;align-items:center;overflow:hidden;background:#111;position:relative}
+.image-container{width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:default}
+.image-container.fit-width  #comicImage{width:100%;height:auto;max-width:100%;max-height:none}
+.image-container.fit-height #comicImage{height:100%;width:auto;max-height:100%;max-width:none}
+.image-container.fit-page   #comicImage{max-width:100%;max-height:100%;width:auto;height:auto}
+#comicImage{display:block;user-select:none;transform-origin:center center;transition:transform 0.1s}
+.zoom-controls{position:absolute;bottom:16px;right:16px;display:flex;gap:6px;background:rgba(27,30,44,.92);padding:6px;border-radius:6px;border:1px solid #395E62}
+.zoom-btn{width:36px;height:36px;background:#395E62;border:none;color:#fff;border-radius:5px;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center}
+.zoom-btn:hover{background:#446B6E}
 </style>
 </head>
 <body>
@@ -3816,18 +3836,37 @@ header h1{color:#1b1e2c;font-size:20px}
   <button class="btn" id="prevBtn" onclick="prevPage()">← Prev</button>
   <span class="page-info">Page <span id="cur">1</span> / <span id="tot">?</span></span>
   <button class="btn" id="nextBtn" onclick="nextPage()">Next →</button>
+  <button class="btn" id="fitWidthBtn" onclick="setFit('width')">Fit Width</button>
+  <button class="btn active" id="fitHeightBtn" onclick="setFit('height')">Fit Height</button>
 </div>
 <div class="reader">
-  <img id="comicImage" alt="Comic page">
+  <div class="image-container fit-height" id="imageContainer">
+    <img id="comicImage" alt="Comic page">
+  </div>
+  <div class="zoom-controls">
+    <button class="zoom-btn" onclick="zoomOut()">−</button>
+    <button class="zoom-btn" onclick="resetZoom()">⊙</button>
+    <button class="zoom-btn" onclick="zoomIn()">+</button>
+  </div>
 </div>
 <script>
 var base='/s/` + token + `';
-var cur=0,tot=0;
+var cur=0,tot=0,zoom=1,panX=0,panY=0,panning=false,startX=0,startY=0;
+function setFit(mode){
+  var c=document.getElementById('imageContainer');
+  c.classList.remove('fit-width','fit-height','fit-page');
+  c.classList.add('fit-'+mode);
+  document.getElementById('fitWidthBtn').classList.toggle('active',mode==='width');
+  document.getElementById('fitHeightBtn').classList.toggle('active',mode==='height');
+  zoom=1;panX=0;panY=0;applyTransform();
+}
+
 fetch(base+'/pages').then(r=>r.json()).then(d=>{
   tot=d.page_count||0;
   document.getElementById('tot').textContent=tot;
   if(tot>0) loadPage(0);
 });
+
 function loadPage(n){
   if(n<0||n>=tot) return;
   cur=n;
@@ -3835,12 +3874,37 @@ function loadPage(n){
   document.getElementById('comicImage').src=base+'/page/'+cur;
   document.getElementById('prevBtn').disabled=cur===0;
   document.getElementById('nextBtn').disabled=cur===tot-1;
+  zoom=1; panX=0; panY=0; applyTransform();
 }
 function prevPage(){loadPage(cur-1)}
 function nextPage(){loadPage(cur+1)}
+
+function applyTransform(){
+  var img=document.getElementById('comicImage');
+  img.style.transform='scale('+zoom+') translate('+(panX/zoom)+'px,'+(panY/zoom)+'px)';
+  document.getElementById('imageContainer').style.cursor=zoom>1?'grab':'default';
+}
+function zoomIn(){zoom=Math.min(zoom+0.25,5);applyTransform()}
+function zoomOut(){zoom=Math.max(zoom-0.25,0.25);applyTransform()}
+function resetZoom(){zoom=1;panX=0;panY=0;applyTransform()}
+
+
+// Pan support
+var ic=document.getElementById('imageContainer');
+ic.addEventListener('mousedown',function(e){if(zoom<=1)return;panning=true;startX=e.clientX-panX;startY=e.clientY-panY;e.preventDefault();});
+ic.addEventListener('mousemove',function(e){if(!panning)return;panX=e.clientX-startX;panY=e.clientY-startY;applyTransform();e.preventDefault();});
+ic.addEventListener('mouseup',function(){panning=false;});
+ic.addEventListener('mouseleave',function(){panning=false;});
+ic.addEventListener('touchstart',function(e){if(zoom<=1||e.touches.length!==1)return;panning=true;startX=e.touches[0].clientX-panX;startY=e.touches[0].clientY-panY;e.preventDefault();},{passive:false});
+ic.addEventListener('touchmove',function(e){if(!panning||e.touches.length!==1)return;panX=e.touches[0].clientX-startX;panY=e.touches[0].clientY-startY;applyTransform();e.preventDefault();},{passive:false});
+ic.addEventListener('touchend',function(){panning=false;});
+
 document.addEventListener('keydown',function(e){
   if(e.key==='ArrowRight'||e.key==='d') nextPage();
   if(e.key==='ArrowLeft'||e.key==='a') prevPage();
+  if(e.key==='+'||e.key==='=') zoomIn();
+  if(e.key==='-'||e.key==='_') zoomOut();
+  if(e.key==='0') resetZoom();
 });
 </script>
 </body>

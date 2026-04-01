@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="${1:-v2.0.125}"
+VERSION="${1:-v2.1.1}"
 RELEASE_DIR="./releases"
 BINARIES_DIR="./binaries"
 

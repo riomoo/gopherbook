@@ -28,7 +28,7 @@ RUN echo "Building Linux binary..." && \
     CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
     -a \
     -ldflags="-s -w -linkmode external -extldflags '-static'" \
-    -trimpath \
+    -trimpath -gcflags="-l=4" -asmflags=-trimpath \
     -o bin/gopherbook-linux ./app/gopherbook && \
     upx --best --ultra-brute bin/gopherbook-linux && \
     chmod +x bin/gopherbook-linux

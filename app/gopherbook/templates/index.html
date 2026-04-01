@@ -643,9 +643,10 @@
             background: #30363d;
         }
 
-        .reader-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
+        .reader-btn.active {
+            background: #395E62;
+            border-color: #446B6E;
+            color: #fff;
         }
 
         .page-input {
@@ -672,25 +673,47 @@
             height: 100%;
             overflow: hidden;
             position: relative;
-            cursor: grab;
+            cursor: default;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .image-container.panning {
             cursor: grabbing;
         }
 
-        #comicImage {
+        /* fit-width: constrain to container width */
+        .image-container.fit-width #comicImage {
+            width: 100%;
+            height: auto;
+            max-width: 100%;
+            max-height: none;
+        }
+
+        /* fit-height: constrain to container height */
+        .image-container.fit-height #comicImage {
+            height: 100%;
+            width: auto;
+            max-height: 100%;
+            max-width: none;
+        }
+
+        /* fit-page: fit entirely within the box */
+        .image-container.fit-page #comicImage {
             max-width: 100%;
             max-height: 100%;
+            width: auto;
+            height: auto;
+        }
+
+        #comicImage {
             object-fit: contain;
             transform-origin: center center;
             transition: transform 0.1s;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
             user-select: none;
             -webkit-user-drag: none;
+            display: block;
         }
 
         .zoom-controls {
@@ -1236,7 +1259,8 @@
                 <input type="number" class="page-input" id="pageInput" min="1" onchange="goToPage()">
                 <span style="color: #8b949e;"> / <span id="totalPages">0</span></span>
                 <button class="reader-btn" onclick="nextPage()" id="nextBtn">Next →</button>
-                <button class="reader-btn" onclick="toggleFitMode()">Fit: <span id="fitMode">Width</span></button>
+                <button class="reader-btn" id="fitWidthBtn" onclick="setFitMode('width')">Fit Width</button>
+                <button class="reader-btn active" id="fitHeightBtn" onclick="setFitMode('height')">Fit Height</button>
                 <div class="bookmark-indicator" id="bookmarkIndicator" style="display: none;">
                     <span>📖</span>
                     <span id="bookmarkText">Bookmarked</span>
@@ -1410,7 +1434,7 @@
     let currentPage = 0;
     let totalPages = 0;
     let zoomLevel = 1;
-    let fitMode = 'width';
+    let fitMode = 'height';
     let selectedTags = new Set();
     let managingComic = null;
     let categories = [];
@@ -2421,7 +2445,15 @@
 
     function updateImageTransform() {
         const img = document.getElementById('comicImage');
-        img.style.transform = `translate(calc(-50% + ${currentPanX}px), calc(-50% + ${currentPanY}px)) scale(${zoomLevel})`;
+        img.style.transform = `scale(${zoomLevel}) translate(${currentPanX / zoomLevel}px, ${currentPanY / zoomLevel}px)`;
+    }
+
+    function applyFitClass() {
+        const container = document.getElementById('imageContainer');
+        container.classList.remove('fit-width', 'fit-height', 'fit-page');
+        if (fitMode === 'width')  container.classList.add('fit-width');
+        else if (fitMode === 'height') container.classList.add('fit-height');
+        else container.classList.add('fit-page');
     }
 
     async function openReader(comic) {
@@ -2430,6 +2462,7 @@
 
     document.getElementById('readerTitle').textContent = comic.title || comic.filename;
     document.getElementById('readerModal').classList.add('active');
+    applyFitClass();
 
     // If encrypted and no password set, try known passwords first
     if (comic.encrypted && !comic.has_password) {
@@ -2568,6 +2601,7 @@
 
         updateBookmarkUI();
         resetZoom();
+        applyFitClass();
     }
 
     function updateBookmarkUI() {
@@ -2722,40 +2756,19 @@
 
     function applyZoom() {
         updateImageTransform();
-
-        // Show/hide grab cursor based on zoom level
         const container = document.getElementById('imageContainer');
-        if (zoomLevel > 1) {
-            container.style.cursor = 'grab';
-        } else {
-            container.style.cursor = 'default';
-        }
+        container.style.cursor = zoomLevel > 1 ? 'grab' : 'default';
     }
 
-    function toggleFitMode() {
-        const modes = ['width', 'height', 'page'];
-        const currentIndex = modes.indexOf(fitMode);
-        fitMode = modes[(currentIndex + 1) % modes.length];
-
-        const img = document.getElementById('comicImage');
-
-        img.style.maxWidth = '';
-        img.style.maxHeight = '';
-        img.style.width = '';
-        img.style.height = '';
-
-        if (fitMode === 'width') {
-            img.style.maxWidth = '100%';
-            img.style.height = 'auto';
-        } else if (fitMode === 'height') {
-            img.style.maxHeight = '100%';
-            img.style.width = 'auto';
-        } else {
-            img.style.maxWidth = '100%';
-            img.style.maxHeight = '100%';
-        }
-
-        document.getElementById('fitMode').textContent = fitMode.charAt(0).toUpperCase() + fitMode.slice(1);
+    function setFitMode(mode) {
+        fitMode = mode;
+        applyFitClass();
+        document.getElementById('fitWidthBtn').classList.toggle('active', mode === 'width');
+        document.getElementById('fitHeightBtn').classList.toggle('active', mode === 'height');
+        zoomLevel = 1;
+        currentPanX = 0;
+        currentPanY = 0;
+        updateImageTransform();
     }
 
     document.addEventListener('keydown', function(e) {
