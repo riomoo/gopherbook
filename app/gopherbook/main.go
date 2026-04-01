@@ -328,9 +328,9 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 		registrationEnabled = true
 	}
 
-	userLibrary := filepath.Join("./library", req.Username)
+	userLibrary := filepath.Join(baseLibraryPath, req.Username)
 	os.MkdirAll(filepath.Join(userLibrary, "Unorganized"), 0755)
-	os.MkdirAll(filepath.Join("./cache/covers", req.Username), 0755)
+	os.MkdirAll(filepath.Join(baseCachePath, req.Username), 0755)
 
 	userWatchPath := filepath.Join(watchPath, req.Username)
 	os.MkdirAll(userWatchPath, 0755)
