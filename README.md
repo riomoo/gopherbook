@@ -6,10 +6,10 @@
 
 <div align="center">
 
-## Self-Hosted Comic Library & CBZ/CBT Reader
+## Self-Hosted Comic Library & CBZ/CBT/CB7 Reader
 
 Gopherbook is a lightweight, single-binary, self-hosted web comic reader and library manager written in Go.  
-It is designed for people who want full control over their digital comic collection (CBZ/CBT files), including support for password-protected/encrypted archives, per-user libraries, tagging, automatic organization, and a clean modern reader.
+It is designed for people who want full control over their digital comic collection (CBZ/CBT/CB7 files), including support for password-protected/encrypted archives, per-user libraries, tagging, automatic organization, and a clean modern reader.
 
 </div>
 
@@ -19,14 +19,17 @@ It is designed for people who want full control over their digital comic collect
 
 ## Features
 
-- Upload & read `.cbz` (ZIP-based) or `.cbt` (TAR-based) comics directly in the browser
-- **Watch folder support for bulk imports** – drop CBZ/CBT files into your watch folder and they're automatically imported
+- Upload & read `.cbz` (ZIP-based), `.cbt` (TAR-based), or `.cb7` (7-Zip-based) comics directly in the browser
+- **CB7 / 7-Zip support** – full read support for 7-Zip archives, both unencrypted and AES-256 encrypted (including header-encrypted `-mhe=on` archives)
+  - LZMA (v1) and LZMA2 decompression supported
+  - CRC32 verification used for reliable password validation (works even with store-only/uncompressed archives where wrong passwords produce silent garbage)
+- **Watch folder support for bulk imports** – drop CBZ/CBT/CB7 files into your watch folder and they're automatically imported
 - Supports 8 Megapixel images at 512MB memory limits
     - (increase in bash script for higher Megapixels or remove the limitation if you don't care)
-- Full support for password-protected/encrypted CBZ files (AES-256 via yeka/zip) or CBT files (AES-256-CFB Openssl)
+- Full support for password-protected/encrypted CBZ files (AES-256 via yeka/zip), CBT files (AES-256-CFB OpenSSL), and CB7 files (AES-256 via bodgit/sevenzip)
 - Automatically tries all previously successful passwords when opening a new encrypted comic
 - Persists discovered passwords securely (AES-encrypted on disk, key derived from your login password)
-- Extracts ComicInfo.xml metadata (title, series, number, writer, inker, tags, story arc, etc.)
+- Extracts ComicInfo.xml metadata (title, series, number, writer, inker, tags, story arc, etc.) from CBZ, CBT, and CB7 archives
 - Automatic folder organization: `Library/Artist/StoryArc/Comic.cbz`
 - Manual reorganization via UI if needed
 - Powerful tagging system with custom colors and counts
@@ -44,7 +47,7 @@ It is designed for people who want full control over their digital comic collect
   - Admin can delete any comic
 - **Single unified bbolt database** – replaces scattered JSON files for better performance and reliability
 - **Easy comic deletion** – quick remove comics from your library with a single click
-- **Shareable links** – generate and share direct links to individual comics
+- **Shareable links** – generate and share direct links to individual comics, with optional share-level password protection
 - **Pagination support** – efficient browsing of large comic collections
 - **Collections** – organize comics into custom collections for better library management
 - No external dependencies – everything self-contained in a single binary
@@ -88,7 +91,7 @@ Then open http://localhost:12010 in your browser.
 ### First launch
 1. On first run there are no users → registration is open
 2. Create the first account → this user automatically becomes admin
-3. Log in → start uploading CBZ/CBT files
+3. Log in → start uploading CBZ/CBT/CB7 files
 
 ## Directory layout after first login
 ```
@@ -108,21 +111,29 @@ GOPHERBOOK_WATCH=$HOME/.config/gopherbook/watch
 GBKPORT=8080                                           # Set the port the server listens on (default: 8080)
 ```
 
+## Supported Formats
+
+| Format | Extension | Encryption | Metadata (ComicInfo.xml) | Notes |
+|--------|-----------|------------|--------------------------|-------|
+| CBZ    | `.cbz`    | AES-256 (yeka/zip) | ✅ | Standard ZIP-based format |
+| CBT    | `.cbt`    | AES-256-CFB (OpenSSL-compatible) | ✅ | TAR-based format |
+| CB7    | `.cb7`    | AES-256 (7-Zip) | ✅ | 7-Zip-based; supports LZMA, LZMA2, header encryption |
+
 ## Watch folder for bulk imports
 
 Gopherbook includes an automatic watch folder system that makes bulk importing comics effortless:
 
 - **Per-user watch folders**: Each user gets their own watch folder at `./watch/[username]/`
-- **Automatic scanning**: The system checks for new CBZ/CBT files every 10 seconds
+- **Automatic scanning**: The system checks for new CBZ/CBT/CB7 files every 10 seconds
 - **Smart debouncing**: Waits 5 seconds after detecting files to ensure they're fully copied
 - **File validation**: Checks that files aren't still being written before importing
 - **Duplicate handling**: Automatically renames files if they already exist (adds _1, _2, etc.)
-- **Zero configuration**: Just drop CBZ/CBT files into your watch folder and they appear in your library
+- **Zero configuration**: Just drop CBZ/CBT/CB7 files into your watch folder and they appear in your library
 
 ### How to use
 
 1. After logging in, your personal watch folder is at `./watch/[yourusername]/`
-2. Copy or move CBZ/CBT files into this folder using any method:
+2. Copy or move CBZ/CBT/CB7 files into this folder using any method:
    - Direct file copy/paste
    - SCP/SFTP upload
    - Network share mount
@@ -136,6 +147,7 @@ Gopherbook includes an automatic watch folder system that makes bulk importing c
 # Bulk copy comics to your watch folder
 cp ~/Downloads/*.cbz ./watch/myusername/
 cp ~/Downloads/*.cbt ./watch/myusername/
+cp ~/Downloads/*.cb7 ./watch/myusername/
 
 # Wait ~15 seconds, then check your library in the web UI
 # All comics will be imported and organized automatically
@@ -143,7 +155,7 @@ cp ~/Downloads/*.cbt ./watch/myusername/
 
 ## How encrypted/password-protected comics work
 
-- When you upload or scan an encrypted CBZ/CBT that has no known password yet, the server marks it as Encrypted = true.
+- When you upload or scan an encrypted CBZ/CBT/CB7 that has no known password yet, the server marks it as Encrypted = true.
 - The first time you open it in the reader, a password prompt appears.
 - If the password is correct, Gopherbook:
   - Stores the password (encrypted with a key derived from your login password)
@@ -151,6 +163,15 @@ cp ~/Downloads/*.cbt ./watch/myusername/
   - Auto-organizes the file into Artist/StoryArc folders
   - Updates tags and cover cache
 - From then on the comic opens instantly, and that password is automatically tried on every future encrypted comic you upload (so whole collections that share one password "just work").
+
+### CB7 encryption notes
+
+CB7 archives support two modes of encryption:
+
+- **Content encryption** (default `-p` flag): file headers are readable but content is encrypted. Wrong passwords produce a decompression error.
+- **Header encryption** (`-mhe=on`): the entire archive including the file list is encrypted. Gopherbook detects this automatically and prompts for a password before listing pages.
+
+In both cases, Gopherbook validates passwords by extracting a file and verifying its CRC32 checksum against the value stored in the archive header, which correctly handles store-only (uncompressed) encrypted archives where wrong passwords otherwise produce silent garbage output.
 
 ## Security notes
 
@@ -202,8 +223,6 @@ Pull requests are welcome! Especially:
 - Better mobile reader experience
 - Bulk tag editing
 - Search box
-- OPDS catalog endpoint
-- More metadata sources (ComicVine, etc.)
 
 Please open an issue first for bigger changes.
 
@@ -218,6 +237,8 @@ Please open an issue first for bigger changes.
 ## Thanks / Credits
 
 - yeka/zip – password-protected ZIP support in pure Go
+- bodgit/sevenzip – 7-Zip archive support in pure Go
+- kulaginds/lzma – LZMA (v1) decompressor for 7-Zip archives
 - The ComicRack ComicInfo.xml standard
 - Everyone who hoards comics ❤️
 

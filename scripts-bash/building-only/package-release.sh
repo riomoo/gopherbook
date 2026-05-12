@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="${1:-v2.1.1}"
+VERSION="${1:-v2.2.0}"
 RELEASE_DIR="./releases"
 BINARIES_DIR="./binaries"
 
@@ -23,7 +23,7 @@ fi
 
 echo "=== Creating README.txt ==="
 cat > /tmp/README.txt << 'EOF'
-Gopherbook - Comic Book Reader (CBZ/CBT)
+Gopherbook - Comic Book Reader (CBZ/CBT/CB7)
 =========================================
 
 Quick Start:
@@ -31,11 +31,11 @@ Quick Start:
 1. Run the gopherbook executable
 2. Open your browser to http://localhost:8112
 3. Register a new user account
-4. Upload your CBZ/CBT comic files
+4. Upload your CBZ/CBT/CB7 comic files
 
 Features:
 ---------
-• Supports CBZ (ZIP) and CBT (TAR) formats
+• Supports CBZ (ZIP), CBT (TAR), and CB7 (7zip) formats
 • Password-protected archives
 • Tag management and filtering
 • Bookmark pages
@@ -48,11 +48,10 @@ Features:
        the person you are sharing the comic with.
 • You can make categories, generate or upload covers for those categories
 • NO MORE JSON FILES just one bbolt DB
-• 
 
 Watch Folder:
 -------------
-Place CBZ/CBT files in the ./watch/<username>/ directory
+Place CBZ/CBT/CB7 files in the ./watch/<username>/ directory
 and they will be automatically imported to your library.
 
 Directory Structure:

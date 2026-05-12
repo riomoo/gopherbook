@@ -1,9 +1,12 @@
 #!/bin/bash
 
-IMAGE_NAME="localhost/gopherbook:2.1.1"
+IMAGE_NAME="localhost/gopherbook:2.2.0"
 CONTAINER_NAME="gopherbook"
-VERSION="2.1.1"
-BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+VERSION="2.2.0"
+# Use the latest git commit timestamp instead of the current wall-clock time.
+# This makes BUILD_DATE stable and reproducible: two builds from the same
+# commit will always produce the same value. Only changes when you commit.
+BUILD_DATE=$(git log -1 --format=%cI 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")
 VCS_REF=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 echo "Building new image: $IMAGE_NAME..."

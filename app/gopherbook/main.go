@@ -39,6 +39,13 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+
+// xmlUnmarshal is a thin wrapper so cbr_cb7.go can call xml.Unmarshal without
+// importing encoding/xml directly (it's already imported in main.go).
+func xmlUnmarshal(data []byte, v interface{}) error {
+	return xml.Unmarshal(data, v)
+}
+
 //go:embed templates/index.html
 var templateFS embed.FS
 
@@ -174,6 +181,11 @@ var (
 	// so serveComicPage and handleComicPages don't re-scan the ZIP on every request.
 	pageIndexCache      = make(map[string][]string)
 	pageIndexCacheMutex sync.RWMutex
+
+	// cb7Mutexes serialises concurrent opens of the same CB7 file.
+	// bodgit/sevenzip's LZMA range decoder is not safe for concurrent reads
+	// on the same file path, so we gate all CB7 operations per file path.
+	cb7Mutexes   sync.Map // map[filePath]*sync.Mutex
 )
 
 func main() {
@@ -481,8 +493,7 @@ func importWatchFolderFiles(username, watchDir string) {
 		}
 
 		ext := strings.ToLower(filepath.Ext(file.Name()))
-		// Support both CBZ and CBT
-		if ext != ".cbz" && ext != ".cbt" {
+		if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" {
 			continue
 		}
 
@@ -564,7 +575,7 @@ func processWatchFolder(username, watchDir string) {
 		}
 
 		ext := strings.ToLower(filepath.Ext(file.Name()))
-		if ext != ".cbz" && ext != ".cbt" {
+		if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" {
 			continue
 		}
 
@@ -809,10 +820,10 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		if part.FormName() == "file" {
 			filename := part.FileName()
 
-			// Validate file extension (CBZ or CBT)
+			// Validate file extension
 			ext := strings.ToLower(filepath.Ext(filename))
-			if ext != ".cbz" && ext != ".cbt" {
-				http.Error(w, "Only .cbz and .cbt files are supported", http.StatusBadRequest)
+			if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" {
+				http.Error(w, "Only .cbz, .cbt and .cb7 files are supported", http.StatusBadRequest)
 				return
 			}
 
@@ -847,16 +858,6 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func logMemStats(label string) {
-    var m runtime.MemStats
-    runtime.ReadMemStats(&m)
-    log.Printf("[%s] Alloc=%dMB, TotalAlloc=%dMB, Sys=%dMB, NumGC=%d",
-        label,
-        m.Alloc/1024/1024,
-        m.TotalAlloc/1024/1024,
-        m.Sys/1024/1024,
-        m.NumGC)
-}
 
 func handleDeleteComic(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
@@ -1018,11 +1019,14 @@ func handleCover(w http.ResponseWriter, r *http.Request) {
 
 	// Generate based on file type
 	var genErr error
-	if comic.FileType == ".cbt" {
+	switch comic.FileType {
+	case ".cbt":
 		genErr = generateCBTCover(&comic, cacheFile)
-	} else if comic.FileType == ".cbz" {
+	case ".cbz":
 		genErr = generateCoverCacheLazy(&comic, cacheFile)
-	} else {
+	case ".cb7":
+		genErr = generateCB7Cover(&comic, cacheFile)
+	default:
 		genErr = fmt.Errorf("unsupported file type: %s", comic.FileType)
 	}
 
@@ -1179,48 +1183,6 @@ func extractCBTMetadata(comic *Comic) {
 	}
 }
 
-// Add this function to open a regular (unencrypted) tar file
-func openTar(filePath string) (*tar.Reader, error) {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return nil, err
-	}
-	// Note: caller must close the underlying file
-	return tar.NewReader(f), nil
-}
-
-func readTarFiles(tr *tar.Reader) ([]TarFileInfo, error) {
-	var files []TarFileInfo
-
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		// Skip directories
-		if header.Typeflag == tar.TypeDir {
-			continue
-		}
-
-		// Read file data
-		data, err := io.ReadAll(tr)
-		if err != nil {
-			return nil, err
-		}
-
-		files = append(files, TarFileInfo{
-			Name: header.Name,
-			Size: header.Size,
-			Data: data,
-		})
-	}
-
-	return files, nil
-}
 
 func validateCBTPassword(filePath, password string) bool {
 	tr, err := openEncryptedTar(filePath, password)
@@ -1577,10 +1539,8 @@ func generateCoverCacheLazy(comic *Comic, cacheFile string) error {
 		return resizeCoverDirectly(comic, coverFile, cacheFile, 300)
 	}
 	pixelCount := config.Width * config.Height
-	log.Printf("Cover dimensions: %dx%d (%d pixels), format: %s", config.Width, config.Height, pixelCount, format)
-	// If image is huge (>20 megapixels), use direct resize
+	_ = format
 	if pixelCount > 20*1000*1000 {
-		log.Printf("Image too large (%d megapixels), using direct resize", pixelCount/1000000)
 		return resizeCoverDirectly(comic, coverFile, cacheFile, 300)
 	}
 
@@ -1615,12 +1575,11 @@ func generateCoverCacheLazy(comic *Comic, cacheFile string) error {
 	runtime.GC()
 
 	// Resize with aggressive memory management
-	return resizeImageAggressively(tempPath, cacheFile, 300) // Reduced from 400
+	return resizeImageAggressively(tempPath, cacheFile, 300)
 }
 
 
-// New function: resize directly from reader for huge images
-// NEW: Improved resizeCoverDirectly with streaming decode
+// resizeCoverDirectly handles cover images too large to decode in memory directly.
 func resizeCoverDirectly(comic *Comic, coverFile *yzip.File, cacheFile string, maxDim int) error {
 	if coverFile.IsEncrypted() && comic.Password != "" {
 		coverFile.SetPassword(comic.Password)
@@ -1697,18 +1656,6 @@ func resizeImageAggressively(inputPath, outputPath string, maxDimension int) err
 	}
 	defer f.Close()
 
-	// First check dimensions WITHOUT decoding full image
-	config, format, err := image.DecodeConfig(f)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Resizing %s image: %dx%d", format, config.Width, config.Height)
-
-	// Seek back to start
-	f.Seek(0, 0)
-
-	// Decode with size awareness
 	img, _, err := image.Decode(f)
 	if err != nil {
 		return err
@@ -1740,15 +1687,12 @@ func resizeImageAggressively(inputPath, outputPath string, maxDimension int) err
 	var resizeMethod resize.InterpolationFunction
 	ratio := float64(width*height) / float64(newWidth*newHeight)
 
-	if ratio > 100 { // Massive reduction (>100x pixels)
+	if ratio > 100 {
 		resizeMethod = resize.NearestNeighbor
-		log.Printf("Using NearestNeighbor (ratio: %.1f)", ratio)
 	} else if ratio > 25 {
 		resizeMethod = resize.Bilinear
-		log.Printf("Using Bilinear (ratio: %.1f)", ratio)
 	} else {
 		resizeMethod = resize.Lanczos3
-		log.Printf("Using Lanczos3 (ratio: %.1f)", ratio)
 	}
 
 	// For VERY large images, do multi-pass resize
@@ -1764,8 +1708,7 @@ func resizeImageAggressively(inputPath, outputPath string, maxDimension int) err
 			iWidth = int(float64(width) * float64(intermediateSize) / float64(height))
 		}
 
-		log.Printf("Multi-pass resize: %dx%d -> %dx%d -> %dx%d",
-			width, height, iWidth, iHeight, newWidth, newHeight)
+		log.Printf("Multi-pass resize: %dx%d -> %dx%d", width, height, newWidth, newHeight)
 
 		// First pass
 		tempImg := resize.Resize(uint(iWidth), uint(iHeight), img, resize.NearestNeighbor)
@@ -2106,9 +2049,23 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If not marked encrypted in memory, re-check the file directly.
+	// This handles stale DB entries where Encrypted=false was saved before
+	// encryption detection worked correctly for CB7.
 	if !comic.Encrypted {
-		http.Error(w, "Comic not encrypted", http.StatusBadRequest)
-		return
+		comic.Encrypted = isCB7Encrypted(comic.FilePath)
+		if comic.Encrypted {
+			// Update in-memory and DB
+			comicsMutex.Lock()
+			c := comics[decodedID]
+			c.Encrypted = true
+			comics[decodedID] = c
+			comicsMutex.Unlock()
+			debounceSave()
+		} else {
+			http.Error(w, "Comic not encrypted", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Use the validation function
@@ -2138,6 +2095,8 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		extractCBTMetadata(&c)
 	} else if c.FileType == ".cbz" {
 		extractCBZMetadataInternal(&c)
+	} else if c.FileType == ".cb7" {
+		extractCB7Metadata(&c)
 	}
 
 	// Update tags
@@ -2190,6 +2149,10 @@ func validatePassword(filePath string, password string) bool {
 
 	if ext == ".cbt" {
 		return validateCBTPassword(filePath, password)
+	}
+
+	if ext == ".cb7" {
+		return validateCB7Password(filePath, password)
 	}
 
 	if ext == ".cbz" {
@@ -2426,15 +2389,17 @@ func getComicPageIndex(comic *Comic) ([]string, error) {
 }
 
 func serveComicPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum string) {
-	// Handle CBT files
-	if comic.FileType == ".cbt" {
+	switch comic.FileType {
+	case ".cbt":
 		serveCBTPage(w, r, comic, pageNum)
 		return
-	}
-
-	// Handle CBZ files
-	if comic.FileType != ".cbz" {
-		http.Error(w, "Only CBZ and CBT formats supported for page viewing", http.StatusBadRequest)
+	case ".cb7":
+		serveCB7Page(w, r, comic, pageNum)
+		return
+	case ".cbz":
+		// handled below
+	default:
+		http.Error(w, "Unsupported format: "+comic.FileType, http.StatusBadRequest)
 		return
 	}
 
@@ -2556,28 +2521,30 @@ func handleComicPages(w http.ResponseWriter, r *http.Request) {
 		comicsMutex.RUnlock()
 	}
 
-	// Handle CBT files
-	if comic.FileType == ".cbt" {
+	// Handle non-CBZ formats
+	switch comic.FileType {
+	case ".cbt":
 		count, err := getCBTPageCount(comic)
 		if err != nil {
 			http.Error(w, "Error reading comic", http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"page_count": count,
-			"pages":      []string{},
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count, "pages": []string{}})
 		return
-	}
-
-	// Handle CBZ files
-	if comic.FileType != ".cbz" {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"page_count": 0,
-			"pages":      []string{},
-		})
+	case ".cb7":
+		count, err := getCB7PageCount(comic)
+		if err != nil {
+			http.Error(w, "Error reading comic", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count, "pages": []string{}})
+		return
+	case ".cbz":
+		// handled below
+	default:
+		json.NewEncoder(w).Encode(map[string]interface{}{"page_count": 0, "pages": []string{}})
 		return
 	}
 
@@ -2633,6 +2600,24 @@ func processComic(filePath, filename string, modTime time.Time) Comic {
 			extractCBTMetadata(&comic)
 
 			// Update tag counts for newly discovered tags
+			tagsMutex.Lock()
+			for _, tag := range comic.Tags {
+				if tagData, exists := tags[tag]; exists {
+					tagData.Count++
+					tags[tag] = tagData
+				} else {
+					tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
+				}
+			}
+			tagsMutex.Unlock()
+		}
+	} else if comic.FileType == ".cb7" {
+		comic.Encrypted = isCB7Encrypted(comic.FilePath)
+
+		// Extract metadata for unencrypted CB7 files
+		if !comic.Encrypted {
+			extractCB7Metadata(&comic)
+
 			tagsMutex.Lock()
 			for _, tag := range comic.Tags {
 				if tagData, exists := tags[tag]; exists {
@@ -2738,6 +2723,8 @@ func extractMetadata(comic *Comic) {
 		extractCBZMetadataInternal(comic)
 	} else if comic.FileType == ".cbt" {
 		extractCBTMetadata(comic)
+	} else if comic.FileType == ".cb7" {
+		extractCB7Metadata(comic)
 	}
 }
 
@@ -2834,7 +2821,7 @@ func scanLibrary() {
 		}
 
 		ext := strings.ToLower(filepath.Ext(path))
-		if ext != ".cbz" && ext != ".cbt" {
+		if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" {
 			return nil
 		}
 
@@ -2858,11 +2845,14 @@ func scanLibrary() {
 			c.LastModified = info.ModTime()
 
 			// Re-extract metadata if file changed
-			if ext == ".cbt" {
-				// Check if encrypted
-				encrypted, _ := isTarEncrypted(path)
-				if !encrypted {
+			switch ext {
+			case ".cbt":
+				if enc, _ := isTarEncrypted(path); !enc {
 					extractCBTMetadata(&c)
+				}
+			case ".cb7":
+				if !isCB7Encrypted(path) {
+					extractCB7Metadata(&c)
 				}
 			}
 
@@ -3020,12 +3010,22 @@ func loadComics() {
 		b.ForEach(func(k, v []byte) error {
 			var c Comic
 			if err := json.Unmarshal(v, &c); err == nil {
+				// Re-check encryption for CB7 files that were saved as unencrypted
+				// before encryption detection was working correctly.
+				if c.FileType == ".cb7" && !c.Encrypted && !c.HasPassword {
+					c.Encrypted = isCB7Encrypted(c.FilePath)
+					if c.Encrypted {
+						log.Printf("[loadComics] re-detected CB7 %q as encrypted", c.Filename)
+					}
+				}
 				comics[string(k)] = c
 			}
 			return nil
 		})
 		return nil
 	})
+	// Persist any encryption corrections
+	debounceSave()
 }
 
 // tags
@@ -3642,10 +3642,13 @@ func handleSharedComic(w http.ResponseWriter, r *http.Request) {
 			tmpCache := ownerCachePath
 			os.MkdirAll(filepath.Dir(tmpCache), 0755)
 			var genErr error
-			if comic.FileType == ".cbt" {
+			switch comic.FileType {
+			case ".cbt":
 				genErr = generateCBTCover(&comic, tmpCache)
-			} else if comic.FileType == ".cbz" {
+			case ".cbz":
 				genErr = generateCoverCacheLazy(&comic, tmpCache)
+			case ".cb7":
+				genErr = generateCB7Cover(&comic, tmpCache)
 			}
 			if genErr == nil {
 				http.ServeFile(w, r, tmpCache)
@@ -3665,34 +3668,23 @@ func handleSharedComic(w http.ResponseWriter, r *http.Request) {
 
 func serveSharedPages(w http.ResponseWriter, comic Comic) {
 	w.Header().Set("Content-Type", "application/json")
-	if comic.FileType == ".cbt" {
-		count, err := getCBTPageCount(comic)
-		if err != nil {
-			http.Error(w, "Error reading comic", http.StatusInternalServerError)
-			return
-		}
+	switch comic.FileType {
+	case ".cbt":
+		count, _ := getCBTPageCount(comic)
+		json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count})
+		return
+	case ".cb7":
+		count, _ := getCB7PageCount(comic)
 		json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count})
 		return
 	}
-	// CBZ
-	yr, err := yzip.OpenReader(comic.FilePath)
+	// CBZ — use the page index cache
+	names, err := getComicPageIndex(&comic)
 	if err != nil {
 		http.Error(w, "Error reading comic", http.StatusInternalServerError)
 		return
 	}
-	defer yr.Close()
-	count := 0
-	for _, f := range yr.File {
-		if f.FileInfo().IsDir() {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".avif" ||
-			ext == ".jxl" || ext == ".jp2" || ext == ".webp" || ext == ".gif" || ext == ".bmp" {
-			count++
-		}
-	}
-	json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count})
+	json.NewEncoder(w).Encode(map[string]interface{}{"page_count": len(names)})
 }
 
 func serveSharedPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum string) {
@@ -3701,9 +3693,8 @@ func serveSharedPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNu
 		return
 	}
 
-	// For CBT, use the existing helper which accepts a Comic with Password set
-	if comic.FileType == ".cbt" {
-		// Temporarily register the password so serveCBTPage can find it
+	// For non-CBZ formats, inject password and delegate to format handler
+	if comic.FileType == ".cbt" || comic.FileType == ".cb7" {
 		if comic.HasPassword {
 			passwordsMutex.Lock()
 			prev, had := comicPasswords[comic.ID]
@@ -3719,7 +3710,12 @@ func serveSharedPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNu
 				passwordsMutex.Unlock()
 			}()
 		}
-		serveCBTPage(w, r, comic, pageNum)
+		switch comic.FileType {
+		case ".cbt":
+			serveCBTPage(w, r, comic, pageNum)
+		case ".cb7":
+			serveCB7Page(w, r, comic, pageNum)
+		}
 		return
 	}
 
@@ -3882,7 +3878,7 @@ function nextPage(){loadPage(cur+1)}
 function applyTransform(){
   var img=document.getElementById('comicImage');
   img.style.transform='scale('+zoom+') translate('+(panX/zoom)+'px,'+(panY/zoom)+'px)';
-  document.getElementById('imageContainer').style.cursor=zoom>1?'grab':'default';
+  document.getElementById('imageContainer').style.cursor='grab';
 }
 function zoomIn(){zoom=Math.min(zoom+0.25,5);applyTransform()}
 function zoomOut(){zoom=Math.max(zoom-0.25,0.25);applyTransform()}
@@ -3891,11 +3887,11 @@ function resetZoom(){zoom=1;panX=0;panY=0;applyTransform()}
 
 // Pan support
 var ic=document.getElementById('imageContainer');
-ic.addEventListener('mousedown',function(e){if(zoom<=1)return;panning=true;startX=e.clientX-panX;startY=e.clientY-panY;e.preventDefault();});
+ic.addEventListener('mousedown',function(e){panning=true;startX=e.clientX-panX;startY=e.clientY-panY;e.preventDefault();});
 ic.addEventListener('mousemove',function(e){if(!panning)return;panX=e.clientX-startX;panY=e.clientY-startY;applyTransform();e.preventDefault();});
 ic.addEventListener('mouseup',function(){panning=false;});
 ic.addEventListener('mouseleave',function(){panning=false;});
-ic.addEventListener('touchstart',function(e){if(zoom<=1||e.touches.length!==1)return;panning=true;startX=e.touches[0].clientX-panX;startY=e.touches[0].clientY-panY;e.preventDefault();},{passive:false});
+ic.addEventListener('touchstart',function(e){if(e.touches.length!==1)return;panning=true;startX=e.touches[0].clientX-panX;startY=e.touches[0].clientY-panY;e.preventDefault();},{passive:false});
 ic.addEventListener('touchmove',function(e){if(!panning||e.touches.length!==1)return;panX=e.touches[0].clientX-startX;panY=e.touches[0].clientY-startY;applyTransform();e.preventDefault();},{passive:false});
 ic.addEventListener('touchend',function(){panning=false;});
 
@@ -4079,6 +4075,12 @@ func handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ComicIDs != nil {
 		cat.ComicIDs = req.ComicIDs
+		// Invalidate collage cache so cover regenerates with the new comic list.
+		// Leave upload covers alone - only reset collage type cache.
+		if cat.CoverType != "upload" {
+			collageCache := filepath.Join(cachePath, "cat_"+id+".jpg")
+			os.Remove(collageCache)
+		}
 	}
 	categories[id] = cat
 	categoriesMutex.Unlock()
@@ -4137,7 +4139,7 @@ func handleCategorycover(w http.ResponseWriter, r *http.Request) {
 	// Uploaded custom cover
 	if cat.CoverType == "upload" && cat.CoverPath != "" {
 		if _, err := os.Stat(cat.CoverPath); err == nil {
-			w.Header().Set("Cache-Control", "public, max-age=86400")
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			http.ServeFile(w, r, cat.CoverPath)
 			return
 		}
@@ -4150,9 +4152,11 @@ func handleCategorycover(w http.ResponseWriter, r *http.Request) {
 	// (simple approach: always regenerate if cat has comics and cache is older than 1s after last write -
 	//  instead just regenerate if cache missing or explicitly requested via ?regen=1)
 	regen := r.URL.Query().Get("regen") == "1"
-	if !regen {
+	if regen {
+		os.Remove(cacheFile)
+	} else {
 		if _, err := os.Stat(cacheFile); err == nil {
-			w.Header().Set("Cache-Control", "public, max-age=86400")
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			http.ServeFile(w, r, cacheFile)
 			return
 		}
@@ -4185,10 +4189,13 @@ func handleCategorycover(w http.ResponseWriter, r *http.Request) {
 		coverCache := filepath.Join(cachePath, comic.ID+".jpg")
 		if _, err := os.Stat(coverCache); err != nil {
 			// Try to generate the individual cover first
-			if comic.FileType == ".cbz" {
+			switch comic.FileType {
+			case ".cbz":
 				generateCoverCacheLazy(&comic, coverCache)
-			} else if comic.FileType == ".cbt" {
+			case ".cbt":
 				generateCBTCover(&comic, coverCache)
+			case ".cb7":
+				generateCB7Cover(&comic, coverCache)
 			}
 		}
 		if f, err := os.Open(coverCache); err == nil {
@@ -4235,7 +4242,7 @@ func handleCategorycover(w http.ResponseWriter, r *http.Request) {
 	jpeg.Encode(f, collage, &jpeg.Options{Quality: 85})
 	f.Close()
 
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	http.ServeFile(w, r, cacheFile)
 }
 
