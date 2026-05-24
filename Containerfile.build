@@ -1,4 +1,14 @@
-# Multi-platform build container for Gopherbook
+# Multi-platform build container for Gopherbook — musl/Alpine toolchain
+#
+# Produces:
+#   bin/gopherbook-linux               — server,  Linux,   static musl
+#   bin/gopherbook-windows.exe         — server,  Windows, mingw
+#   bin/gopherbook-desktop-linux-musl  — desktop, Linux,   musl  (Alpine/Void/musl hosts)
+#   bin/gopherbook-desktop-linux-glibc — desktop, Linux,   glibc (Debian/Ubuntu/Fedora/Arch hosts)
+#   bin/gopherbook-desktop-windows.exe — desktop, Windows, mingw
+#
+# The glibc desktop binary is cross-compiled via zig cc, which ships its own
+# bundled glibc headers — no second builder image required.
 #
 # Pin: to update this digest, run:
 #   podman inspect --format='{{index .RepoDigests 0}}' golang:alpine
@@ -6,34 +16,56 @@
 # Then replace it below.
 FROM docker.io/library/golang@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d AS builder
 
-# Pin APK package versions (Alpine 3.21).
-# To refresh versions after an intentional update:
-#podman run --rm docker.io/library/golang@sha256: \
-#  sh -c "apk update -q && apk search -x musl-dev gcc g++ mingw-w64-gcc wget xz git" \
-#  | sort \
-#  | awk 'match($0, /^(.*)-([0-9]+\..*)$/, a) {printf "    %s=%s \\\n", a[1], a[2]}'
-#docker run --rm docker.io/library/golang@sha256: \
-#  sh -c "apk update -q && apk search -x musl-dev gcc g++ mingw-w64-gcc wget xz git" \
-#  | sort \
-#  | awk 'match($0, /^(.*)-([0-9]+\..*)$/, a) {printf "    %s=%s \\\n", a[1], a[2]}'
+# Pin APK package versions (Alpine 3.23).
 RUN apk add --no-cache \
+    fontconfig-dev=2.17.1-r0 \
+    freetype-dev=2.14.1-r0 \
     g++=15.2.0-r2 \
     gcc=15.2.0-r2 \
     git=2.52.0-r0 \
+    libx11-dev=1.8.12-r1 \
+    libxcursor-dev=1.2.3-r0 \
+    libxext-dev=1.3.6-r2 \
+    libxi-dev=1.8.2-r0 \
+    libxinerama-dev=1.1.5-r4 \
+    libxkbcommon-dev=1.12.2-r0 \
+    libxrandr-dev=1.5.4-r1 \
+    libxxf86vm-dev=1.1.7-r0 \
+    mesa-dev=25.2.7-r1 \
     mingw-w64-gcc=15.2.0-r0 \
     musl-dev=1.2.5-r23 \
+    wayland-dev=1.24.0-r0 \
     wget=1.25.0-r2 \
     xz=5.8.3-r0
 
 # Install UPX — pinned version + SHA256 verification.
-# NOTE: --best is used intentionally. --ultra-brute is non-deterministic
-# (it runs random compression trials) and produces different bytes each
+# Note: --best is used intentionally. --ultra-brute is non-deterministic
 # build, defeating reproducibility. --best is fully deterministic.
 RUN wget -q https://github.com/upx/upx/releases/download/v5.1.1/upx-5.1.1-amd64_linux.tar.xz && \
     echo "1ff660454227861e00772f743f66b900072116b9dc24f6ee28b97cce88a7828a  upx-5.1.1-amd64_linux.tar.xz" | sha256sum -c - && \
     tar -xf upx-5.1.1-amd64_linux.tar.xz && \
     mv upx-5.1.1-amd64_linux/upx /usr/local/bin/upx && \
     rm -r upx-5.1.1-amd64_linux upx-5.1.1-amd64_linux.tar.xz
+
+# Install Zig — used as a glibc-targeting CC for the desktop Linux glibc build.
+# Zig ships its own bundled glibc headers so no system glibc is needed.
+# NOTE: the full directory must be kept — zig locates its stdlib and bundled
+# glibc headers relative to the executable path. Only the binary is symlinked.
+# Wrapper scripts inject -Wno-error globally so Alpine's musl headers don't
+# cause fatal errors when Go's own runtime/cgo files include sys/types.h.
+# Pin: to refresh the sha256, run check.sh and copy the value it prints.
+ARG ZIG_VERSION=0.16.0
+ARG ZIG_SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+RUN wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz && \
+    echo "${ZIG_SHA256}  zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | sha256sum -c - && \
+    tar -xf zig-x86_64-linux-${ZIG_VERSION}.tar.xz && \
+    mv zig-x86_64-linux-${ZIG_VERSION} /usr/local/zig && \
+    ln -s /usr/local/zig/zig /usr/local/bin/zig && \
+    rm zig-x86_64-linux-${ZIG_VERSION}.tar.xz && \
+    printf '#!/bin/sh\nexec /usr/local/zig/zig cc -target x86_64-linux-gnu.2.28 -Wno-error "$@"\n' \
+        > /usr/local/bin/zigcc && chmod +x /usr/local/bin/zigcc && \
+    printf '#!/bin/sh\nexec /usr/local/zig/zig c++ -target x86_64-linux-gnu.2.28 -Wno-error "$@"\n' \
+        > /usr/local/bin/zigcxx && chmod +x /usr/local/bin/zigcxx
 
 WORKDIR /app
 
@@ -42,18 +74,18 @@ RUN go mod download
 
 COPY . .
 
-# Build Linux binary
-RUN echo "Building Linux binary..." && \
+# ── Server build — Linux ──────────────────────────────────────────────────────
+RUN echo "Building server Linux binary..." && \
     CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
     -a \
     -ldflags="-s -w -linkmode external -extldflags '-static'" \
     -trimpath -gcflags="-l=4" -asmflags=-trimpath \
     -o bin/gopherbook-linux ./app/gopherbook && \
-    upx --best --lzma --brute bin/gopherbook-linux && \
+    upx --best --lzma bin/gopherbook-linux && \
     chmod +x bin/gopherbook-linux
 
-# Build Windows binary
-RUN echo "Building Windows binary..." && \
+# ── Server build — Windows ────────────────────────────────────────────────────
+RUN echo "Building server Windows binary..." && \
     echo 'IDI_ICON1 ICON "./app/gopherbook/static/images/favicon/faviconbig.ico"' > gopherbook.rc && \
     x86_64-w64-mingw32-windres gopherbook.rc -o ./app/gopherbook/gopherbook.syso && \
     CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc go build \
@@ -61,14 +93,68 @@ RUN echo "Building Windows binary..." && \
     -ldflags="-s -w" \
     -trimpath \
     -o bin/gopherbook-windows.exe ./app/gopherbook && \
-    upx --best --lzma --brute bin/gopherbook-windows.exe && \
+    upx --best --lzma bin/gopherbook-windows.exe && \
     rm ./app/gopherbook/gopherbook.syso gopherbook.rc
 
-# Verify binaries were created
+# ── Desktop build — Linux musl (Fyne, -tags desktop) ─────────────────────────
+RUN echo "Building desktop Linux musl binary..." && \
+    CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+    -tags desktop \
+    -a \
+    -ldflags="-s -w" \
+    -trimpath -gcflags="-l=4" -asmflags=-trimpath \
+    -o bin/gopherbook-desktop-linux-musl ./app/gopherbook && \
+    upx --best --lzma bin/gopherbook-desktop-linux-musl && \
+    chmod +x bin/gopherbook-desktop-linux-musl
+
+# ── Desktop build — Linux glibc (Fyne, -tags desktop, zig cc) ────────────────
+# Targets x86_64-linux-gnu.2.28 (Debian 10+, Ubuntu 18.10+, Fedora 29+,
+# any modern Arch/Void/etc glibc host). The zigcc/zigcxx wrapper scripts
+# bake in the target and -Wno-error so all cgo invocations, including Go's
+# own runtime/cgo — compile cleanly against Alpine's musl headers.
+# CGO_CFLAGS uses -isystem (lower priority than zig's own glibc sysroot) so
+# zig's bundled glibc endian.h gets used, but X11/GL/etc subdirs are still found.
+RUN echo "Building desktop Linux glibc binary..." && \
+    CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+    CC=zigcc CXX=zigcxx \
+    CGO_CFLAGS="-isystem /usr/include" \
+    CGO_LDFLAGS="-L/usr/lib -L/usr/local/lib" \
+    go build \
+    -tags desktop \
+    -a \
+    -ldflags="-s -w" \
+    -trimpath -gcflags="-l=4" -asmflags=-trimpath \
+    -o bin/gopherbook-desktop-linux-glibc ./app/gopherbook && \
+    upx --best --lzma bin/gopherbook-desktop-linux-glibc && \
+    chmod +x bin/gopherbook-desktop-linux-glibc
+
+# ── Desktop build — Windows (Fyne, -tags desktop, mingw cross-compile) ────────
+# -H=windowsgui suppresses the console window on Windows.
+RUN echo "Building desktop Windows binary..." && \
+    echo 'IDI_ICON1 ICON "./app/gopherbook/static/images/favicon/faviconbig.ico"' > gopherbook-desktop.rc && \
+    x86_64-w64-mingw32-windres gopherbook-desktop.rc -o ./app/gopherbook/gopherbook.syso && \
+    CGO_ENABLED=1 \
+    GOOS=windows GOARCH=amd64 \
+    CC=x86_64-w64-mingw32-gcc \
+    CXX=x86_64-w64-mingw32-g++ \
+    CGO_CFLAGS="-D_WIN32_WINNT=0x0601" \
+    go build \
+    -tags desktop \
+    -a \
+    -ldflags="-s -w -H=windowsgui" \
+    -trimpath \
+    -o bin/gopherbook-desktop-windows.exe ./app/gopherbook && \
+    upx --best --lzma bin/gopherbook-desktop-windows.exe && \
+    rm ./app/gopherbook/gopherbook.syso gopherbook-desktop.rc
+
+# ── Verify all five binaries ──────────────────────────────────────────────────
 RUN ls -lh bin/ && \
     echo "Build complete!" && \
-    echo "Linux binary size: $(du -h bin/gopherbook-linux | cut -f1)" && \
-    echo "Windows binary size: $(du -h bin/gopherbook-windows.exe | cut -f1)"
+    echo "Server   Linux        : $(du -h bin/gopherbook-linux | cut -f1)" && \
+    echo "Server   Windows      : $(du -h bin/gopherbook-windows.exe | cut -f1)" && \
+    echo "Desktop  Linux  musl  : $(du -h bin/gopherbook-desktop-linux-musl | cut -f1)" && \
+    echo "Desktop  Linux  glibc : $(du -h bin/gopherbook-desktop-linux-glibc | cut -f1)" && \
+    echo "Desktop  Windows      : $(du -h bin/gopherbook-desktop-windows.exe | cut -f1)"
 
 # Keep the builder stage as the final stage so we can copy files out
 FROM builder

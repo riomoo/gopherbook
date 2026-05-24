@@ -8,8 +8,10 @@
 
 ## Self-Hosted Comic Library & CBZ/CBT/CB7 Reader
 
-Gopherbook is a lightweight, single-binary, self-hosted web comic reader and library manager written in Go.  
+Gopherbook is a lightweight, single-binary, self-hosted comic reader and library manager written in Go.  
 It is designed for people who want full control over their digital comic collection (CBZ/CBT/CB7 files), including support for password-protected/encrypted archives, per-user libraries, tagging, automatic organization, and a clean modern reader.
+
+Available as a **server** (browser-based) and a **desktop** (native window, no browser required) version.
 
 </div>
 
@@ -17,24 +19,56 @@ It is designed for people who want full control over their digital comic collect
 
 [![Custom badge](https://git.jester-designs.com/riomoo/gopherbook/media/branch/main/docs/images/svgs/PIL.svg)](LICENSE)
 
+## Versions
+
+| Version | Description | Runs on |
+|---------|-------------|---------|
+| **Server** | Browser-based, self-hosted, multi-user | Any Linux, Windows |
+| **Desktop (glibc)** | Native desktop window, no browser needed | Ubuntu, Debian, Fedora, Arch, Void glibc, any glibc 2.28+ distro |
+| **Desktop (musl)** | Native desktop window, no browser needed | Alpine, Void musl, any musl-based distro |
+| **Desktop (Windows)** | Native desktop window, no browser needed | Windows 10+ 64-bit |
+
+### Desktop Example:
+<details>
+<summary>See it in action</summary>
+<br>
+
+#### MP4 Video Link:
+<a href="https://share.jester-designs.com/view/gopherbook-desktop.mp4">
+  <img src="https://share.jester-designs.com/view/gopherbook-desktop.png" alt="Gopherbook Desktop Demo — click to watch" width="100%">
+</a>
+
+</details>
+
+
 ## Features
 
-- Upload & read `.cbz` (ZIP-based), `.cbt` (TAR-based), or `.cb7` (7-Zip-based) comics directly in the browser
-- **CB7 / 7-Zip support** – full read support for 7-Zip archives, both unencrypted and AES-256 encrypted (including header-encrypted `-mhe=on` archives)
+### Server & Desktop
+- Upload & read `.cbz` (ZIP-based), `.cbt` (TAR-based), or `.cb7` (7-Zip-based) comics
+- **CB7 / 7-Zip support**: full read support for 7-Zip archives, both unencrypted and AES-256 encrypted (including header-encrypted `-mhe=on` archives)
   - LZMA (v1) and LZMA2 decompression supported
   - CRC32 verification used for reliable password validation (works even with store-only/uncompressed archives where wrong passwords produce silent garbage)
-- **Watch folder support for bulk imports** – drop CBZ/CBT/CB7 files into your watch folder and they're automatically imported
+- **Watch folder support for bulk imports**: drop CBZ/CBT/CB7 files into your watch folder and they're automatically imported
 - Supports 8 Megapixel images at 512MB memory limits
     - (increase in bash script for higher Megapixels or remove the limitation if you don't care)
 - Full support for password-protected/encrypted CBZ files (AES-256 via yeka/zip), CBT files (AES-256-CFB OpenSSL), and CB7 files (AES-256 via bodgit/sevenzip)
-- Automatically tries all previously successful passwords when opening a new encrypted comic
+- **Automatically tries all previously successful passwords** when opening a new encrypted comic, no prompt if a known password works
 - Persists discovered passwords securely (AES-encrypted on disk, key derived from your login password)
 - Extracts ComicInfo.xml metadata (title, series, number, writer, inker, tags, story arc, etc.) from CBZ, CBT, and CB7 archives
 - Automatic folder organization: `Library/Artist/StoryArc/Comic.cbz`
+- **Automatic artist tag**: when metadata is extracted, the artist is automatically added as a tag so your tag list always reflects your library's artists without any manual effort
 - Manual reorganization via UI if needed
 - Powerful tagging system with custom colors and counts
-- Filter comics by any combination of tags
+- Filter comics by any combination of tags, alphabetically, or by search
 - Responsive grid view with cached JPEG covers
+- Paginated library browsing for large collections
+- **Single unified bbolt database**: replaces scattered JSON files for better performance and reliability
+- **Easy comic deletion**: remove comics from your library with a right-click or trash icon
+- **Shareable links**: generate and share direct links to individual comics, with optional share-level password protection
+- **Collections**: organize comics into custom collections with generated or uploaded covers
+- No external dependencies: everything self-contained in a single binary
+
+### Server only
 - Full-screen web reader with:
   - Page pre-loading
   - Zoom / pan
@@ -45,30 +79,66 @@ It is designed for people who want full control over their digital comic collect
   - First registered user becomes admin
   - Admin can disable new registrations
   - Admin can delete any comic
-- **Single unified bbolt database** – replaces scattered JSON files for better performance and reliability
-- **Easy comic deletion** – quick remove comics from your library with a single click
-- **Shareable links** – generate and share direct links to individual comics, with optional share-level password protection
-- **Pagination support** – efficient browsing of large comic collections
-- **Collections** – organize comics into custom collections for better library management
-- No external dependencies – everything self-contained in a single binary
-- Single static Go binary + file storage – easy to deploy
+
+### Desktop only
+- Native window — no browser required, launches directly as a desktop app
+- Available as an AppImage for easy distribution on Linux
 
 ## Installation / Running
 
 ### Prerequisites
 [![Go](https://img.shields.io/badge/go-%2300ADD8.svg?style=for-the-badge&logo=go&logoColor=white)](https://golang.org/dl/)
-- Go 1.26.0+ (only needed to build)
-- Or just download a pre-built binary from Releases (when available)
+- Go 1.26.0+ (only needed to build from source)
+- Or download a pre-built binary or AppImage from Releases
 
-### Quick start (from source)
+### Quick start: Server (from source)
 ```bash
 git clone https://codeberg.org/riomoo/gopherbook.git
 cd gopherbook
-go build -o gopherbook app/gopherbook/main.go
+go build -o gopherbook ./app/gopherbook
 ./gopherbook
 ```
 
 Then open http://localhost:8080 in your browser.
+
+### Quick start: Desktop (from source)
+```bash
+git clone https://codeberg.org/riomoo/gopherbook.git
+cd gopherbook
+go build -tags desktop -o gopherbook-desktop ./app/gopherbook
+./gopherbook-desktop
+```
+
+### Quick start: Pre-built binaries
+
+Download the appropriate release from the Releases page:
+
+| File | Description |
+|------|-------------|
+| `gopherbook-*-linux-x86_64.tar.gz` | Server, Linux |
+| `gopherbook-*-windows-amd64.zip` | Server, Windows |
+| `gopherbook-*-desktop-linux-glibc-x86_64.tar.gz` | Desktop, Linux glibc (Ubuntu/Fedora/Arch/etc) |
+| `gopherbook-*-desktop-linux-musl-x86_64.tar.gz` | Desktop, Linux musl (Alpine/Void musl/etc) |
+| `gopherbook-*-desktop-windows-amd64.zip` | Desktop, Windows |
+| `gopherbook-*-linux-x86_64.AppImage` | Server, Linux AppImage |
+| `gopherbook-*-desktop-linux-glibc-x86_64.AppImage` | Desktop, Linux glibc AppImage |
+
+### Building all binaries with Podman
+
+```bash
+# Build the container image
+podman build -f Containerfile.build -t gopherbook-builder .
+
+# Extract all 5 binaries
+mkdir -p binaries
+podman run --rm -v ./binaries:/out gopherbook-builder \
+  sh -c "cp bin/* /out/"
+```
+
+Then package for release:
+```bash
+./package-release.sh v3.0.0
+```
 
 ## If you want to use this with podman:
 ```bash
@@ -77,7 +147,7 @@ cd gopherbook
 ./scripts-bash/run-gb-container/run-podman.sh
 ```
 
-or 
+or
 
 ## If you want to use this with docker:
 ```bash
@@ -95,10 +165,19 @@ Then open http://localhost:12010 in your browser.
 
 ## Directory layout after first login
 ```
-./library/username/                ← your comics (organized or Unorganized/)
-./cache/covers/username/           ← generated cover thumbnails
-./watch/username/                  ← watch folder for bulk imports (auto-scanned)
-./data/gopherbook.db               ← unified bbolt database (users, comics, tags, passwords, collections)
+./library/username/                <- your comics (organized or Unorganized/)
+./cache/covers/username/           <- generated cover thumbnails
+./watch/username/                  <- watch folder for bulk imports (auto-scanned)
+./etc/gopherbook.db                <- unified bbolt database (users, comics, tags, passwords, collections)
+```
+
+For AppImage installs, data is stored in:
+```
+~/.config/gopherbook/library/        <- your comics
+~/.config/gopherbook/covers/         <- generated cover thumbnails
+~/.config/gopherbook/watch/          <- watch folder
+~/.config/gopherbook/etc/            <- database
+~/.config/gopherbook/gopherbook.conf <- config file (edit to change port or paths)
 ```
 
 ## Environment Variables
@@ -108,7 +187,7 @@ GOPHERBOOK_LIBRARY=$HOME/.config/gopherbook/library
 GOPHERBOOK_CACHE=$HOME/.config/gopherbook/covers
 GOPHERBOOK_ETC=$HOME/.config/gopherbook/etc
 GOPHERBOOK_WATCH=$HOME/.config/gopherbook/watch
-GBKPORT=8080                                           # Set the port the server listens on (default: 8080)
+GBKPORT=8112                                           # Set the port the server listens on (default: 8080)
 ```
 
 ## Supported Formats
@@ -128,7 +207,7 @@ Gopherbook includes an automatic watch folder system that makes bulk importing c
 - **Smart debouncing**: Waits 5 seconds after detecting files to ensure they're fully copied
 - **File validation**: Checks that files aren't still being written before importing
 - **Duplicate handling**: Automatically renames files if they already exist (adds _1, _2, etc.)
-- **Zero configuration**: Just drop CBZ/CBT/CB7 files into your watch folder and they appear in your library
+- **Zero configuration**: Just drop CBZ/CBT/CB7 files into your watch folder under your user name and they appear in your library
 
 ### How to use
 
@@ -156,7 +235,8 @@ cp ~/Downloads/*.cb7 ./watch/myusername/
 ## How encrypted/password-protected comics work
 
 - When you upload or scan an encrypted CBZ/CBT/CB7 that has no known password yet, the server marks it as Encrypted = true.
-- The first time you open it in the reader, a password prompt appears.
+- When you open it, Gopherbook first tries all previously successful passwords automatically.
+- If none work, a password prompt appears.
 - If the password is correct, Gopherbook:
   - Stores the password (encrypted with a key derived from your login password)
   - Extracts ComicInfo.xml metadata
@@ -239,6 +319,7 @@ Please open an issue first for bigger changes.
 - yeka/zip – password-protected ZIP support in pure Go
 - bodgit/sevenzip – 7-Zip archive support in pure Go
 - kulaginds/lzma – LZMA (v1) decompressor for 7-Zip archives
+- fyne.io/fyne – desktop GUI framework for the native desktop version
 - The ComicRack ComicInfo.xml standard
 - Everyone who hoards comics ❤️
 

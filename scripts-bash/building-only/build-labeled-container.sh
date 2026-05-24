@@ -1,8 +1,8 @@
 #!/bin/bash
 
-IMAGE_NAME="localhost/gopherbook:2.2.0"
+IMAGE_NAME="localhost/gopherbook:3.0.0"
 CONTAINER_NAME="gopherbook"
-VERSION="2.2.0"
+VERSION="3.0.0"
 # Use the latest git commit timestamp instead of the current wall-clock time.
 # This makes BUILD_DATE stable and reproducible: two builds from the same
 # commit will always produce the same value. Only changes when you commit.

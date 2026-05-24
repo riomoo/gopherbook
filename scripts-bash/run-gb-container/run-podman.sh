@@ -24,7 +24,10 @@ echo "Starting new container from image: $IMAGE_NAME..."
 # IMPROVED: Better memory settings and limits
 podman run -d --name "$CONTAINER_NAME" \
   --memory=512m \
+  --memory-swap=512m \
   --restart unless-stopped \
+  -e GOMEMLIMIT=480MiB \
+  -e GOMAXPROCS=2 \
   -p 12010:8080 \
   -v ./library:/app/library \
   -v ./cache:/app/cache \

@@ -7,7 +7,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
@@ -19,13 +18,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
-	"strings"
-	"io/fs"
-	"sync"
-	"time"
 	"runtime"
 	"runtime/debug"
+	"sort"
+	"strings"
+	"time"
 	"image"
 	"image/draw"
 	"image/jpeg"
@@ -46,244 +43,6 @@ func xmlUnmarshal(data []byte, v interface{}) error {
 	return xml.Unmarshal(data, v)
 }
 
-//go:embed templates/index.html
-var templateFS embed.FS
-
-//go:embed all:static
-var staticFS embed.FS
-
-// ComicInfo represents the standard ComicInfo.xml metadata
-type ComicInfo struct {
-	XMLName   xml.Name `xml:"ComicInfo"`
-	Title     string   `xml:"Title"`
-	Series    string   `xml:"Series"`
-	Number    string   `xml:"Number"`
-	Writer    string   `xml:"Writer"`
-	Artist    string   `xml:"Artist"`
-	Inker     string   `xml:"Inker"`
-	Publisher string   `xml:"Publisher"`
-	Genre     string   `xml:"Genre"`
-	TagsXml   string   `xml:"Tags"`
-	StoryArc  string   `xml:"StoryArc"`
-	Year      string   `xml:"Year"`
-	Month     string   `xml:"Month"`
-	Summary   string   `xml:"Summary"`
-	PageCount int      `xml:"PageCount"`
-}
-
-type User struct {
-	Username     string `json:"username"`
-	PasswordHash string `json:"password_hash"`
-	IsAdmin      bool   `json:"is_admin"`
-}
-
-type Comic struct {
-	ID            string    `json:"id"`
-	Filename      string    `json:"filename"`
-	Artist        string    `json:"artist"`
-	Title         string    `json:"title"`
-	Series        string    `json:"series"`
-	StoryArc      string    `json:"story_arc"`
-	Number        string    `json:"number"`
-	Publisher     string    `json:"publisher"`
-	Year          string    `json:"year"`
-	PageCount     int       `json:"page_count"`
-	CoverImage    string    `json:"cover_image"`
-	FilePath      string    `json:"file_path"`
-	FileType      string    `json:"file_type"`
-	Encrypted     bool      `json:"encrypted"`
-	HasPassword   bool      `json:"has_password"`
-	Password      string    `json:"-"`
-	Tags          []string  `json:"tags"`
-	UploadedAt    time.Time `json:"uploaded_at"`
-	Bookmarks     []int     `json:"bookmarks"`
-	LastModified  time.Time `json:"last_modified"`
-}
-
-type Session struct {
-	Username  string
-	ExpiresAt time.Time
-}
-
-type ShareLink struct {
-	ID                    string     `json:"id"`
-	ComicID               string     `json:"comic_id"`
-	Username              string     `json:"username"`
-	CreatedAt             time.Time  `json:"created_at"`
-	ExpiresAt             *time.Time `json:"expires_at,omitempty"` // nil = permanent
-	Permanent             bool       `json:"permanent"`
-	ComicPassword         string     `json:"-"`                              // plaintext, in-memory only, never serialised
-	SharePasswordHash     string     `json:"share_password_hash,omitempty"`  // bcrypt hash of the share-level password
-	EncryptedComicPassword string    `json:"encrypted_comic_password,omitempty"` // AES(comicPassword, deriveKey(sharePassword)), base64
-	ComicEncrypted        bool       `json:"comic_encrypted"`               // true when the underlying comic is encrypted
-	ComicFilePath         string     `json:"comic_file_path"`               // snapshot so lookup works when user is offline
-	ComicFileType         string     `json:"comic_file_type"`
-	ComicTitle            string     `json:"comic_title"`
-	ComicFilename         string     `json:"comic_filename"`
-}
-
-type Tag struct {
-	Name  string `json:"name"`
-	Color string `json:"color"`
-	Count int    `json:"count"`
-}
-
-type Category struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	ComicIDs  []string  `json:"comic_ids"`
-	CoverType string    `json:"cover_type"` // "collage" or "upload"
-	CoverPath string    `json:"cover_path"` // path to custom cover if uploaded
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type TarFileInfo struct {
-	Name string
-	Size int64
-	Data []byte
-}
-
-type shareUnlockSession struct {
-	ComicPassword string
-	ExpiresAt     time.Time
-}
-
-var (
-	db                   *bolt.DB
-	users                = make(map[string]User)
-	sessions             = make(map[string]Session)
-	comics               = make(map[string]Comic)
-	tags                 = make(map[string]Tag)
-	comicPasswords       = make(map[string]string)
-	shareLinks              = make(map[string]ShareLink) // token -> ShareLink
-	shareLinksMutex         sync.RWMutex
-	shareUnlockSessions     = make(map[string]shareUnlockSession) // key=(shareToken+":"+nonce)
-	shareUnlockSessionsMutex sync.RWMutex
-	coverGenSemaphore       chan struct{} // sized in main() based on CPU count
-	categories           = make(map[string]Category)
-	categoriesMutex      sync.RWMutex
-	comicsMutex          sync.RWMutex
-	sessionsMutex        sync.RWMutex
-	tagsMutex            sync.RWMutex
-	passwordsMutex       sync.RWMutex
-	currentEncryptionKey []byte
-	libraryPath          = "./library"
-	cachePath            = "./cache/covers"
-	etcPath              = "./etc"
-	currentUser          string
-	registrationEnabled  = true
-	saveTimer            *time.Timer // For debounced saves
-	watchFolders = make(map[string]*time.Timer)
-	watchMutex   sync.RWMutex
-	watchPath    = "./watch"
-
-	// pageIndexCache stores the sorted list of image filenames per comic ID,
-	// so serveComicPage and handleComicPages don't re-scan the ZIP on every request.
-	pageIndexCache      = make(map[string][]string)
-	pageIndexCacheMutex sync.RWMutex
-
-	// cb7Mutexes serialises concurrent opens of the same CB7 file.
-	// bodgit/sevenzip's LZMA range decoder is not safe for concurrent reads
-	// on the same file path, so we gate all CB7 operations per file path.
-	cb7Mutexes   sync.Map // map[filePath]*sync.Mutex
-)
-
-func main() {
-	os.MkdirAll(libraryPath, 0755)
-	os.MkdirAll(cachePath, 0755)
-	os.MkdirAll(etcPath, 0755)
-	os.MkdirAll(watchPath, 0755)
-
-	// Scale cover generation concurrency to CPU count, capped at 4
-	coverWorkers := runtime.NumCPU()
-	if coverWorkers > 4 {
-		coverWorkers = 4
-	}
-	coverGenSemaphore = make(chan struct{}, coverWorkers)
-	log.Printf("Cover generation semaphore width: %d", coverWorkers)
-
-	var err error
-	db, err = bolt.Open(filepath.Join(etcPath, "gopherbooks.db"), 0600, &bolt.Options{Timeout: 1 * time.Second})
-	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
-	}
-	defer db.Close()
-
-	// Ensure top-level buckets exist
-	db.Update(func(tx *bolt.Tx) error {
-		tx.CreateBucketIfNotExists([]byte("config"))
-		return nil
-	})
-
-	loadUsers()
-	// Load share links for all known users at startup so public share URLs
-	// work even before the owner logs in.
-	for username := range users {
-		loadShareLinks(username)
-	}
-	initWatchFolders()
-	// Create static sub-filesystem once
-	staticSubFS, err := fs.Sub(staticFS, "static")
-	if err != nil {
-		log.Fatal(fmt.Errorf("failed to create static sub-filesystem: %w", err))
-	}
-
-	// Create handlers once and reuse
-	staticHandler := http.FileServer(http.FS(staticSubFS))
-
-	http.HandleFunc("/api/register", handleRegister)
-	http.HandleFunc("/api/login", handleLogin)
-	http.HandleFunc("/api/logout", handleLogout)
-	http.HandleFunc("/api/comics", authMiddleware(handleComics))
-	http.HandleFunc("/api/upload", authMiddleware(handleUpload))
-	http.HandleFunc("/api/user", authMiddleware(handleUser))
-	http.HandleFunc("/api/pages/", authMiddleware(handleComicPages))
-	http.HandleFunc("/api/comic/", authMiddleware(handleComicFile))
-	http.HandleFunc("/api/cover/", authMiddleware(handleCover))
-	http.HandleFunc("/api/tags", authMiddleware(handleTags))
-	http.HandleFunc("/api/comic-tags/", authMiddleware(handleComicTags))
-	http.HandleFunc("/api/set-password/", authMiddleware(handleSetPassword))
-	http.HandleFunc("/api/try-passwords/", authMiddleware(handleTryKnownPasswords))
-	http.HandleFunc("/api/bookmark/", authMiddleware(handleBookmark))
-	http.HandleFunc("/api/admin/toggle-registration", authMiddleware(handleToggleRegistration))
-	http.HandleFunc("/api/admin/delete-comic/", authMiddleware(handleDeleteComic))
-	http.HandleFunc("/api/delete-comic/", authMiddleware(handleUserDeleteComic))
-	http.HandleFunc("/api/watch-folder", authMiddleware(handleWatchFolder))
-	http.HandleFunc("/api/share/create/", authMiddleware(handleCreateShare))
-	http.HandleFunc("/api/share/list", authMiddleware(handleListShares))
-	http.HandleFunc("/api/share/delete/", authMiddleware(handleDeleteShare))
-	http.HandleFunc("/api/share/unlock/", handleShareUnlock)
-	http.HandleFunc("/api/categories", authMiddleware(handleCategories))
-	http.HandleFunc("/api/category/create", authMiddleware(handleCreateCategory))
-	http.HandleFunc("/api/category/update/", authMiddleware(handleUpdateCategory))
-	http.HandleFunc("/api/category/delete/", authMiddleware(handleDeleteCategory))
-	http.HandleFunc("/api/category/cover/", authMiddleware(handleCategorycover))
-	http.HandleFunc("/api/category/upload-cover/", authMiddleware(handleCategoryUploadCover))
-	http.HandleFunc("/s/", handleSharedComic)
-	http.HandleFunc("/", serveUI)
-	http.Handle("/static/", http.StripPrefix("/static/", staticHandler))
-
-	go func() {
-		for {
-			time.Sleep(30 * time.Second)
-			runtime.GC()
-			debug.FreeOSMemory()
-		}
-	}()
-
-	// Periodic session cleanup
-	go cleanupSessions()
-	// Periodic share link expiry cleanup
-	go cleanupExpiredShareLinks()
-
-	port := os.Getenv("GBKPORT")
-	if port == "" {
-		port = "8080"
-	}
-	addr := ":" + port
-	log.Printf("Server starting on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
-}
 
 func handleRegister(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -695,6 +454,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	loadComics()
 	loadTags()
+	rebuildTagCounts()
+	debounceSave()
 	loadPasswordsWithKey(key)
 	loadShareLinks(req.Username)
 	loadCategories()
@@ -792,6 +553,7 @@ func handleComics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(comicList)
 }
 
@@ -1753,6 +1515,7 @@ func saveJPEG(img image.Image, path string) error {
 
 func handleTags(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 
 	switch r.Method {
 	case http.MethodGet:
@@ -1962,52 +1725,8 @@ func handleTryKnownPasswords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Password worked! Save it and extract metadata
-	comicsMutex.Lock()
-	c := comics[decodedID]
-	c.Password = validPassword
-	c.HasPassword = true
-	extractMetadata(&c)
-
-	tagsMutex.Lock()
-	for _, tag := range c.Tags {
-		if tagData, exists := tags[tag]; exists {
-			tagData.Count++
-			tags[tag] = tagData
-		} else {
-			tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
-		}
-	}
-	tagsMutex.Unlock()
-
-	if c.Artist != "Unknown" || c.StoryArc != "" {
-		inker := sanitizeFilename(c.Artist)
-		storyArc := sanitizeFilename(c.StoryArc)
-		if inker == "" {
-			inker = "Unknown"
-		}
-		if storyArc == "" {
-			storyArc = "No_StoryArc"
-		}
-		newDir := filepath.Join(libraryPath, inker, storyArc)
-		os.MkdirAll(newDir, 0755)
-		filename := filepath.Base(c.FilePath)
-		newPath := filepath.Join(newDir, filename)
-		if newPath != c.FilePath {
-			if err := os.Rename(c.FilePath, newPath); err == nil {
-				c.FilePath = newPath
-			}
-		}
-	}
-
-	comics[decodedID] = c
-	comicsMutex.Unlock()
-
-	passwordsMutex.Lock()
-	comicPasswords[decodedID] = validPassword
-	passwordsMutex.Unlock()
-
-	debounceSave()
+	// Password worked! Save it, extract metadata, persist.
+	c := applyPasswordToComic(decodedID, validPassword)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -2074,67 +1793,11 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Password is valid - save it
-	comicsMutex.Lock()
-	c := comics[decodedID]
-	c.Password = req.Password
-	c.HasPassword = true
-	comics[decodedID] = c
-	comicsMutex.Unlock()
+	// Password is valid — apply it, extract metadata, persist.
+	c := applyPasswordToComic(decodedID, req.Password)
 
-	passwordsMutex.Lock()
-	comicPasswords[decodedID] = req.Password
-	passwordsMutex.Unlock()
-
-	// Extract metadata with the valid password
-	comicsMutex.Lock()
-	c = comics[decodedID]
-
-	// IMPORTANT: Set password before extraction so it can decrypt
-	if c.FileType == ".cbt" {
-		extractCBTMetadata(&c)
-	} else if c.FileType == ".cbz" {
-		extractCBZMetadataInternal(&c)
-	} else if c.FileType == ".cb7" {
-		extractCB7Metadata(&c)
-	}
-
-	// Update tags
-	tagsMutex.Lock()
-	for _, tag := range c.Tags {
-		if tagData, exists := tags[tag]; exists {
-			tagData.Count++
-			tags[tag] = tagData
-		} else {
-			tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
-		}
-	}
-	tagsMutex.Unlock()
-
-	// Auto-organize if we have metadata
-	if c.Artist != "Unknown" || c.StoryArc != "" {
-		inker := sanitizeFilename(c.Artist)
-		storyArc := sanitizeFilename(c.StoryArc)
-		if inker == "" {
-			inker = "Unknown"
-		}
-		if storyArc == "" {
-			storyArc = "No_StoryArc"
-		}
-		newDir := filepath.Join(libraryPath, inker, storyArc)
-		os.MkdirAll(newDir, 0755)
-		filename := filepath.Base(c.FilePath)
-		newPath := filepath.Join(newDir, filename)
-		if newPath != c.FilePath {
-			if err := os.Rename(c.FilePath, newPath); err == nil {
-				c.FilePath = newPath
-			}
-		}
-	}
-
-	comics[decodedID] = c
-	comicsMutex.Unlock()
-
+	// Rebuild tag counts so the new artist tag is immediately visible
+	// in /api/tags without requiring a logout/login cycle.
 	debounceSave()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2223,6 +1886,61 @@ func validatePassword(filePath string, password string) bool {
 	}
 
 	return false
+}
+
+// applyPasswordToComic sets the password on a comic, extracts its metadata,
+// auto-organizes the file, and persists everything. Returns the updated Comic.
+// Used by both handleTryKnownPasswords and handleSetPassword.
+func applyPasswordToComic(id, password string) Comic {
+	comicsMutex.Lock()
+	c := comics[id]
+	c.Password = password
+	c.HasPassword = true
+	extractMetadata(&c)
+	injectArtistTag(&c)
+
+	tagsMutex.Lock()
+	for _, tag := range c.Tags {
+		if tagData, exists := tags[tag]; exists {
+			tagData.Count++
+			tags[tag] = tagData
+		} else {
+			tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
+		}
+	}
+	tagsMutex.Unlock()
+
+	if c.Artist != "Unknown" || c.StoryArc != "" {
+		inker := sanitizeFilename(c.Artist)
+		storyArc := sanitizeFilename(c.StoryArc)
+		if inker == "" {
+			inker = "Unknown"
+		}
+		if storyArc == "" {
+			storyArc = "No_StoryArc"
+		}
+		newDir := filepath.Join(libraryPath, inker, storyArc)
+		os.MkdirAll(newDir, 0755)
+		newPath := filepath.Join(newDir, filepath.Base(c.FilePath))
+		if newPath != c.FilePath {
+			if err := os.Rename(c.FilePath, newPath); err == nil {
+				c.FilePath = newPath
+			}
+		}
+	}
+
+	comics[id] = c
+	comicsMutex.Unlock()
+
+	passwordsMutex.Lock()
+	comicPasswords[id] = password
+	passwordsMutex.Unlock()
+
+	rebuildTagCounts()
+	saveTags()
+	saveComics()
+	savePasswords()
+	return c
 }
 
 func handleBookmark(w http.ResponseWriter, r *http.Request) {
@@ -2589,6 +2307,11 @@ func processComic(filePath, filename string, modTime time.Time) Comic {
 			}
 			yr.Close()
 		}
+		// Extract metadata eagerly for unencrypted CBZ files so the artist
+		// tag is available immediately (not deferred to lazy load).
+		if !comic.Encrypted {
+			extractCBZMetadataInternal(&comic)
+		}
 	} else if comic.FileType == ".cbt" {
 		encrypted, err := isTarEncrypted(comic.FilePath)
 		if err == nil {
@@ -2598,18 +2321,6 @@ func processComic(filePath, filename string, modTime time.Time) Comic {
 		// IMPORTANT: Extract metadata for unencrypted CBT files
 		if !encrypted {
 			extractCBTMetadata(&comic)
-
-			// Update tag counts for newly discovered tags
-			tagsMutex.Lock()
-			for _, tag := range comic.Tags {
-				if tagData, exists := tags[tag]; exists {
-					tagData.Count++
-					tags[tag] = tagData
-				} else {
-					tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
-				}
-			}
-			tagsMutex.Unlock()
 		}
 	} else if comic.FileType == ".cb7" {
 		comic.Encrypted = isCB7Encrypted(comic.FilePath)
@@ -2617,29 +2328,32 @@ func processComic(filePath, filename string, modTime time.Time) Comic {
 		// Extract metadata for unencrypted CB7 files
 		if !comic.Encrypted {
 			extractCB7Metadata(&comic)
-
-			tagsMutex.Lock()
-			for _, tag := range comic.Tags {
-				if tagData, exists := tags[tag]; exists {
-					tagData.Count++
-					tags[tag] = tagData
-				} else {
-					tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
-				}
-			}
-			tagsMutex.Unlock()
 		}
 	}
 
-	// Extract artist from directory structure
+	// Extract artist from directory structure as fallback
 	parentDir := filepath.Dir(filePath)
 	if filepath.Base(parentDir) != "Unorganized" {
 		dirName := filepath.Base(filepath.Dir(parentDir))
-		// Only override if metadata didn't provide an artist
 		if comic.Artist == "Unknown" {
 			comic.Artist = dirName
 		}
 	}
+
+	// Inject artist tag now that artist is fully resolved
+	injectArtistTag(&comic)
+
+	// Register all tags (including the injected artist tag) in the global map
+	tagsMutex.Lock()
+	for _, tag := range comic.Tags {
+		if tagData, exists := tags[tag]; exists {
+			tagData.Count++
+			tags[tag] = tagData
+		} else {
+			tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
+		}
+	}
+	tagsMutex.Unlock()
 
 	comic.CoverImage = "/api/cover/" + url.QueryEscape(comic.ID)
 
@@ -2656,8 +2370,16 @@ func loadComicMetadataLazy(comicID string) error {
 		return fmt.Errorf("comic not found")
 	}
 
-	// Already has metadata, skip
-	if comic.Series != "" || comic.Title != "" {
+	// Already has metadata or artist tag already injected — skip
+	artistTag := strings.ToLower(strings.TrimSpace(comic.Artist))
+	artistTagged := false
+	for _, t := range comic.Tags {
+		if strings.ToLower(t) == artistTag && artistTag != "" && artistTag != "unknown" {
+			artistTagged = true
+			break
+		}
+	}
+	if comic.Series != "" || comic.Title != "" || artistTagged {
 		return nil
 	}
 
@@ -2678,6 +2400,20 @@ func loadComicMetadataLazy(comicID string) error {
 
 	// Extract metadata NOW (works for both CBZ and CBT)
 	extractMetadata(&comic)
+
+	// Fall back to directory structure for artist name, same as processComic
+	if comic.Artist == "" || comic.Artist == "Unknown" {
+		parentDir := filepath.Dir(comic.FilePath)
+		if filepath.Base(parentDir) != "Unorganized" {
+			dirName := filepath.Base(filepath.Dir(parentDir))
+			if dirName != "" && dirName != "." && dirName != libraryPath {
+				comic.Artist = dirName
+			}
+		}
+	}
+
+	// Ensure artist name is present as a tag
+	injectArtistTag(&comic)
 
 	// Update tags
 	tagsMutex.Lock()
@@ -2854,8 +2590,25 @@ func scanLibrary() {
 				if !isCB7Encrypted(path) {
 					extractCB7Metadata(&c)
 				}
+			case ".cbz":
+				if enc := func() bool {
+					yr, err := yzip.OpenReader(path)
+					if err != nil {
+						return false
+					}
+					defer yr.Close()
+					for _, f := range yr.File {
+						if f.IsEncrypted() {
+							return true
+						}
+					}
+					return false
+				}(); !enc {
+					extractCBZMetadataInternal(&c)
+				}
 			}
 
+			injectArtistTag(&c)
 			comics[id] = c
 			comicsMutex.Unlock()
 		} else {
@@ -2882,6 +2635,8 @@ func scanLibrary() {
 	comicsMutex.Unlock()
 
 	debounceSave()
+	rebuildTagCounts()
+	saveTags()
 	runtime.GC()
 	debug.FreeOSMemory()
 }
@@ -2915,6 +2670,23 @@ func userBucket(kind, username string) []byte {
 }
 
 // ensureUserBuckets creates per-user buckets inside a write transaction.
+// injectArtistTag ensures the comic's artist name appears as a lowercase tag.
+// It is a no-op if artist is unknown/empty or the tag already exists.
+// Call this after all metadata has been resolved (artist name finalised, tags parsed).
+func injectArtistTag(comic *Comic) {
+	artist := strings.TrimSpace(comic.Artist)
+	if artist == "" || strings.EqualFold(artist, "Unknown") {
+		return
+	}
+	artistTag := strings.ToLower(artist)
+	for _, t := range comic.Tags {
+		if strings.ToLower(t) == artistTag {
+			return // already present
+		}
+	}
+	comic.Tags = append(comic.Tags, artistTag)
+}
+
 func ensureUserBuckets(tx *bolt.Tx, username string) error {
 	for _, kind := range []string{"comics", "tags", "passwords", "shares", "categories"} {
 		if _, err := tx.CreateBucketIfNotExists(userBucket(kind, username)); err != nil {
@@ -3000,32 +2772,75 @@ func saveComics() {
 }
 
 func loadComics() {
+	modified := false
 	db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(userBucket("comics", currentUser))
 		if b == nil {
 			return nil
 		}
 		comicsMutex.Lock()
-		defer comicsMutex.Unlock()
 		b.ForEach(func(k, v []byte) error {
 			var c Comic
 			if err := json.Unmarshal(v, &c); err == nil {
-				// Re-check encryption for CB7 files that were saved as unencrypted
-				// before encryption detection was working correctly.
 				if c.FileType == ".cb7" && !c.Encrypted && !c.HasPassword {
 					c.Encrypted = isCB7Encrypted(c.FilePath)
 					if c.Encrypted {
 						log.Printf("[loadComics] re-detected CB7 %q as encrypted", c.Filename)
+						modified = true
 					}
+				}
+				before := len(c.Tags)
+				injectArtistTag(&c)
+				if len(c.Tags) != before {
+					modified = true
 				}
 				comics[string(k)] = c
 			}
 			return nil
 		})
+		comicsMutex.Unlock()
 		return nil
 	})
-	// Persist any encryption corrections
-	debounceSave()
+
+	// Save synchronously outside the mutex so saveComics can acquire RLock.
+	if modified {
+		saveComics()
+	}
+}
+
+// rebuildTagCounts recomputes the global tags map from the current comics.
+// It merges with existing tag colour values so custom colours are preserved.
+func rebuildTagCounts() {
+	comicsMutex.RLock()
+	snapshot := make([]Comic, 0, len(comics))
+	for _, c := range comics {
+		snapshot = append(snapshot, c)
+	}
+	comicsMutex.RUnlock()
+
+	tagsMutex.Lock()
+	defer tagsMutex.Unlock()
+	// Reset counts to zero, keep colours.
+	for name, t := range tags {
+		t.Count = 0
+		tags[name] = t
+	}
+	for _, c := range snapshot {
+		for _, tag := range c.Tags {
+			if t, exists := tags[tag]; exists {
+				t.Count++
+				tags[tag] = t
+			} else {
+				tags[tag] = Tag{Name: tag, Color: "#446B6E", Count: 1}
+			}
+		}
+	}
+	// Remove tags that are now orphaned (count == 0).
+	for name, t := range tags {
+		if t.Count == 0 {
+			delete(tags, name)
+		}
+	}
 }
 
 // tags
