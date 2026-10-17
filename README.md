@@ -6,10 +6,10 @@
 
 <div align="center">
 
-## Self-Hosted Comic Library & CBZ/CBT/CB7 Reader
+## Self-Hosted Comic Library & CBZ/CBT/CB7/EPUB Reader
 
 Gopherbook is a lightweight, single-binary, self-hosted comic reader and library manager written in Go.  
-It is designed for people who want full control over their digital comic collection (CBZ/CBT/CB7 files), including support for password-protected/encrypted archives, per-user libraries, tagging, automatic organization, and a clean modern reader.
+It is designed for people who want full control over their digital comic collection (CBZ/CBT/CB7/EPUB files), including support for password-protected/encrypted archives, per-user libraries, tagging, automatic organization, and a clean modern reader.
 
 Available as a **server** (browser-based) and a **desktop** (native window, no browser required) version.
 
@@ -44,17 +44,22 @@ Available as a **server** (browser-based) and a **desktop** (native window, no b
 ## Features
 
 ### Server & Desktop
-- Upload & read `.cbz` (ZIP-based), `.cbt` (TAR-based), or `.cb7` (7-Zip-based) comics
+- Upload & read `.cbz` (ZIP-based), `.cbt` (TAR-based), `.cb7` (7-Zip-based), or `.epub` (EPUB 3-based) comics
 - **CB7 / 7-Zip support**: full read support for 7-Zip archives, both unencrypted and AES-256 encrypted (including header-encrypted `-mhe=on` archives)
   - LZMA (v1) and LZMA2 decompression supported
   - CRC32 verification used for reliable password validation (works even with store-only/uncompressed archives where wrong passwords produce silent garbage)
-- **Watch folder support for bulk imports**: drop CBZ/CBT/CB7 files into your watch folder and they're automatically imported
+- **EPUB 3 support**: full read support for EPUB 3 comic archives, both unencrypted and AES-256-GCM encrypted
+  - Reads spine order from `content.opf` so pages always appear in the correct sequence
+  - Extracts rich OPF metadata: title, creator, series, story arc, publication year, and subject tags
+  - Encryption detection via `META-INF/encryption.xml`; fast password validation via SHA-256 verify hash in `META-INF/key-hint.txt`
+  - Structural files (`content.opf`, navigation, XHTML) are always plaintext so metadata is readable even on encrypted files without a password
+- **Watch folder support for bulk imports**: drop CBZ/CBT/CB7/EPUB files into your watch folder and they're automatically imported
 - Supports 8 Megapixel images at 512MB memory limits
     - (increase in bash script for higher Megapixels or remove the limitation if you don't care)
 - Full support for password-protected/encrypted CBZ files (AES-256 via yeka/zip), CBT files (AES-256-CFB OpenSSL), and CB7 files (AES-256 via bodgit/sevenzip)
 - **Automatically tries all previously successful passwords** when opening a new encrypted comic, no prompt if a known password works
 - Persists discovered passwords securely (AES-encrypted on disk, key derived from your login password)
-- Extracts ComicInfo.xml metadata (title, series, number, writer, inker, tags, story arc, etc.) from CBZ, CBT, and CB7 archives
+- Extracts ComicInfo.xml metadata (title, series, number, writer, inker, tags, story arc, etc.) from CBZ, CBT, and CB7 archives; extracts OPF metadata (title, creator, series, story arc, year, subjects) from EPUB archives
 - Automatic folder organization: `Library/Artist/StoryArc/Comic.cbz`
 - **Automatic artist tag**: when metadata is extracted, the artist is automatically added as a tag so your tag list always reflects your library's artists without any manual effort
 - Manual reorganization via UI if needed
@@ -99,7 +104,7 @@ go build -o gopherbook ./app/gopherbook
 ./gopherbook
 ```
 
-Then open http://localhost:8080 in your browser.
+Then open http://localhost:8080 in your browser and upload CBZ, CBT, CB7, or EPUB files.
 
 ### Quick start: Desktop (from source)
 ```bash
@@ -197,13 +202,14 @@ GBKPORT=8112                                           # Set the port the server
 | CBZ    | `.cbz`    | AES-256 (yeka/zip) | ✅ | Standard ZIP-based format |
 | CBT    | `.cbt`    | AES-256-CFB (OpenSSL-compatible) | ✅ | TAR-based format |
 | CB7    | `.cb7`    | AES-256 (7-Zip) | ✅ | 7-Zip-based; supports LZMA, LZMA2, header encryption |
+| EPUB   | `.epub`   | AES-256-GCM | ✅ OPF metadata | EPUB 3-based; spine-ordered pages; structural files always plaintext |
 
 ## Watch folder for bulk imports
 
 Gopherbook includes an automatic watch folder system that makes bulk importing comics effortless:
 
 - **Per-user watch folders**: Each user gets their own watch folder at `./watch/[username]/`
-- **Automatic scanning**: The system checks for new CBZ/CBT/CB7 files every 10 seconds
+- **Automatic scanning**: The system checks for new CBZ/CBT/CB7/EPUB files every 10 seconds
 - **Smart debouncing**: Waits 5 seconds after detecting files to ensure they're fully copied
 - **File validation**: Checks that files aren't still being written before importing
 - **Duplicate handling**: Automatically renames files if they already exist (adds _1, _2, etc.)
@@ -227,6 +233,7 @@ Gopherbook includes an automatic watch folder system that makes bulk importing c
 cp ~/Downloads/*.cbz ./watch/myusername/
 cp ~/Downloads/*.cbt ./watch/myusername/
 cp ~/Downloads/*.cb7 ./watch/myusername/
+cp ~/Downloads/*.epub ./watch/myusername/
 
 # Wait ~15 seconds, then check your library in the web UI
 # All comics will be imported and organized automatically
@@ -234,12 +241,12 @@ cp ~/Downloads/*.cb7 ./watch/myusername/
 
 ## How encrypted/password-protected comics work
 
-- When you upload or scan an encrypted CBZ/CBT/CB7 that has no known password yet, the server marks it as Encrypted = true.
+- When you upload or scan an encrypted CBZ/CBT/CB7/EPUB that has no known password yet, the server marks it as Encrypted = true.
 - When you open it, Gopherbook first tries all previously successful passwords automatically.
 - If none work, a password prompt appears.
 - If the password is correct, Gopherbook:
   - Stores the password (encrypted with a key derived from your login password)
-  - Extracts ComicInfo.xml metadata
+  - Extracts metadata (ComicInfo.xml for CBZ/CBT/CB7; OPF for EPUB)
   - Auto-organizes the file into Artist/StoryArc folders
   - Updates tags and cover cache
 - From then on the comic opens instantly, and that password is automatically tried on every future encrypted comic you upload (so whole collections that share one password "just work").
@@ -252,6 +259,14 @@ CB7 archives support two modes of encryption:
 - **Header encryption** (`-mhe=on`): the entire archive including the file list is encrypted. Gopherbook detects this automatically and prompts for a password before listing pages.
 
 In both cases, Gopherbook validates passwords by extracting a file and verifying its CRC32 checksum against the value stored in the archive header, which correctly handles store-only (uncompressed) encrypted archives where wrong passwords otherwise produce silent garbage output.
+
+### EPUB encryption notes
+
+EPUB archives use AES-256-GCM encryption applied only to image files inside `OEBPS/images/`. Structural files (`content.opf`, navigation documents, XHTML pages) are always stored unencrypted, which means:
+
+- Metadata (title, creator, series, etc.) is always readable without a password
+- Gopherbook can show cover placeholders and library entries for encrypted EPUBs before any password is entered
+- Password validation uses a SHA-256 verify hash stored in `META-INF/key-hint.txt`, giving an instant correct/wrong response without needing to decrypt a full image
 
 ## Security notes
 
@@ -321,6 +336,7 @@ Please open an issue first for bigger changes.
 - kulaginds/lzma – LZMA (v1) decompressor for 7-Zip archives
 - fyne.io/fyne – desktop GUI framework for the native desktop version
 - The ComicRack ComicInfo.xml standard
+- The EPUB 3 specification (IDPF / W3C)
 - Everyone who hoards comics ❤️
 
 Enjoy your library!  

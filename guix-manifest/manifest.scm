@@ -1,0 +1,12 @@
+(specifications->manifest
+  '("go"
+    "mesa"
+    "mesa-headers"
+    "libx11"
+    "libxcursor"
+    "libxrandr"
+    "libxinerama"
+    "libxi"
+    "libxxf86vm"
+    "xorgproto"
+    "pkg-config"))

@@ -11,6 +11,11 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"image"
+	"image/draw"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"log"
 	"net/http"
@@ -23,26 +28,20 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"image"
-	"image/draw"
-	"image/jpeg"
-	_ "image/gif"
-	_ "image/png"
 
 	"github.com/nfnt/resize"
 	_ "github.com/vegidio/avif-go"
-	"golang.org/x/crypto/bcrypt"
 	yzip "github.com/yeka/zip"
 	bolt "go.etcd.io/bbolt"
+	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/text/unicode/norm"
 )
-
 
 // xmlUnmarshal is a thin wrapper so cbr_cb7.go can call xml.Unmarshal without
 // importing encoding/xml directly (it's already imported in main.go).
 func xmlUnmarshal(data []byte, v interface{}) error {
 	return xml.Unmarshal(data, v)
 }
-
 
 func handleRegister(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -252,7 +251,7 @@ func importWatchFolderFiles(username, watchDir string) {
 		}
 
 		ext := strings.ToLower(filepath.Ext(file.Name()))
-		if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" {
+		if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" && ext != ".epub" {
 			continue
 		}
 
@@ -334,7 +333,7 @@ func processWatchFolder(username, watchDir string) {
 		}
 
 		ext := strings.ToLower(filepath.Ext(file.Name()))
-		if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" {
+		if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" && ext != ".epub" {
 			continue
 		}
 
@@ -584,8 +583,8 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 			// Validate file extension
 			ext := strings.ToLower(filepath.Ext(filename))
-			if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" {
-				http.Error(w, "Only .cbz, .cbt and .cb7 files are supported", http.StatusBadRequest)
+			if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" && ext != ".epub" {
+				http.Error(w, "Only .cbz, .cbt, .cb7 and .epub files are supported", http.StatusBadRequest)
 				return
 			}
 
@@ -619,7 +618,6 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
 
 func handleDeleteComic(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
@@ -788,6 +786,8 @@ func handleCover(w http.ResponseWriter, r *http.Request) {
 		genErr = generateCoverCacheLazy(&comic, cacheFile)
 	case ".cb7":
 		genErr = generateCB7Cover(&comic, cacheFile)
+	case ".epub":
+		genErr = generateEPUBCover(&comic, cacheFile)
 	default:
 		genErr = fmt.Errorf("unsupported file type: %s", comic.FileType)
 	}
@@ -807,7 +807,6 @@ func handleCover(w http.ResponseWriter, r *http.Request) {
 
 	http.Error(w, "Cover generation failed", http.StatusInternalServerError)
 }
-
 
 func isTarEncrypted(filePath string) (bool, error) {
 	f, err := os.Open(filePath)
@@ -896,7 +895,7 @@ func extractCBTMetadata(comic *Comic) {
 		}
 
 		if strings.ToLower(header.Name) == "comicinfo.xml" ||
-		   strings.HasSuffix(strings.ToLower(header.Name), "/comicinfo.xml") {
+			strings.HasSuffix(strings.ToLower(header.Name), "/comicinfo.xml") {
 
 			// Read the XML data
 			xmlData, err := io.ReadAll(tr)
@@ -945,16 +944,87 @@ func extractCBTMetadata(comic *Comic) {
 	}
 }
 
+// passwordVariants returns password plus the normalizations that a
+// text input can silently introduce without changing what's on
+// screen: NFC/NFD Unicode composition (accented characters typed via
+// dead keys/compose sequences can come out decomposed), invisible
+// characters (zero-width space/joiner, BOM) some input paths inject
+// around composed sequences, and incidental surrounding whitespace.
+// Order matters: the exact bytes typed are tried first.
+func passwordVariants(pw string) []string {
+	strip := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			switch r {
+			case '\u200b', '\u200c', '\u200d', '\ufeff', '\u2060':
+				return -1
+			}
+			return r
+		}, s)
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(s string) {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	add(pw)
+	add(strings.TrimSpace(pw))
+	add(strip(pw))
+	add(strings.TrimSpace(strip(pw)))
+	add(norm.NFC.String(pw))
+	add(norm.NFC.String(strings.TrimSpace(strip(pw))))
+	add(norm.NFD.String(pw))
+	add(norm.NFD.String(strings.TrimSpace(strip(pw))))
+	return out
+}
 
 func validateCBTPassword(filePath, password string) bool {
-	tr, err := openEncryptedTar(filePath, password)
-	if err != nil {
-		return false
+	ok, _ := validateCBTPasswordVariant(filePath, password)
+	return ok
+}
+
+// validateCBTPasswordVariant is validateCBTPassword plus the exact
+// password string that worked, which may differ from the input (see
+// passwordVariants). Callers that persist a password MUST save this
+// return value, not the original input — saving the input when a
+// variant is what actually worked would make every later page-open
+// fail again with the same mismatch.
+func validateCBTPasswordVariant(filePath, password string) (bool, string) {
+	if st, statErr := os.Stat(filePath); statErr != nil {
+		log.Printf("validateCBTPassword %q: cannot stat file: %v", filePath, statErr)
+		return false, ""
+	} else {
+		log.Printf("validateCBTPassword %q: file is %d bytes, password is %d chars", filePath, st.Size(), len([]rune(password)))
 	}
 
-	// Try to read first header
-	_, err = tr.Next()
-	return err == nil || err == io.EOF
+	for i, variant := range passwordVariants(password) {
+		ok, lastErr := tryOpenCBT(filePath, variant)
+		if ok {
+			if i > 0 {
+				log.Printf("validateCBTPassword %q: exact input failed, but variant #%d (of the same password, normalized) worked — the client is sending slightly different bytes than what's on screen", filePath, i)
+			}
+			return true, variant
+		}
+		if i == 0 {
+			log.Printf("validateCBTPassword %q: exact input failed: %v", filePath, lastErr)
+		}
+	}
+	return false, ""
+}
+
+// tryOpenCBT attempts one password: open, decrypt, and confirm the
+// result is a readable tar stream.
+func tryOpenCBT(filePath, password string) (bool, error) {
+	tr, err := openEncryptedTar(filePath, password)
+	if err != nil {
+		return false, fmt.Errorf("open/decrypt: %w", err)
+	}
+	if _, err := tr.Next(); err != nil && err != io.EOF {
+		return false, fmt.Errorf("tar header: %w", err)
+	}
+	return true, nil
 }
 
 // Add this function to generate cover from CBT
@@ -1011,8 +1081,8 @@ func generateCBTCover(comic *Comic, cacheFile string) error {
 
 		ext := strings.ToLower(filepath.Ext(header.Name))
 		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-		   ext == ".gif" || ext == ".avif" || ext == ".webp" ||
-		   ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
+			ext == ".gif" || ext == ".avif" || ext == ".webp" ||
+			ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
 
 			// Found an image, read it
 			imageData, err = io.ReadAll(tr)
@@ -1119,8 +1189,8 @@ func serveCBTPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum s
 
 		ext := strings.ToLower(filepath.Ext(header.Name))
 		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-		   ext == ".gif" || ext == ".avif" || ext == ".webp" ||
-		   ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
+			ext == ".gif" || ext == ".avif" || ext == ".webp" ||
+			ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
 
 			data, err := io.ReadAll(tr)
 			if err != nil {
@@ -1211,8 +1281,8 @@ func getCBTPageCount(comic Comic) (int, error) {
 
 		ext := strings.ToLower(filepath.Ext(header.Name))
 		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-		   ext == ".gif" || ext == ".avif" || ext == ".webp" ||
-		   ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
+			ext == ".gif" || ext == ".avif" || ext == ".webp" ||
+			ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
 			count++
 		}
 	}
@@ -1340,7 +1410,6 @@ func generateCoverCacheLazy(comic *Comic, cacheFile string) error {
 	return resizeImageAggressively(tempPath, cacheFile, 300)
 }
 
-
 // resizeCoverDirectly handles cover images too large to decode in memory directly.
 func resizeCoverDirectly(comic *Comic, coverFile *yzip.File, cacheFile string, maxDim int) error {
 	if coverFile.IsEncrypted() && comic.Password != "" {
@@ -1409,7 +1478,6 @@ func resizeCoverDirectly(comic *Comic, coverFile *yzip.File, cacheFile string, m
 
 	return err
 }
-
 
 func resizeImageAggressively(inputPath, outputPath string, maxDimension int) error {
 	f, err := os.Open(inputPath)
@@ -1707,11 +1775,14 @@ func handleTryKnownPasswords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try each password using the new validation function
+	// Try each password using the new validation function. Same
+	// note as handleSetPassword: the variant that actually decrypted
+	// it, not necessarily the stored known-password string itself,
+	// is what must be persisted.
 	validPassword := ""
 	for _, pwd := range knownPasswords {
-		if validatePassword(comic.FilePath, pwd) {
-			validPassword = pwd
+		if ok, working := validatePasswordVariant(comic.FilePath, pwd); ok {
+			validPassword = working
 			break
 		}
 	}
@@ -1772,7 +1843,12 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	// This handles stale DB entries where Encrypted=false was saved before
 	// encryption detection worked correctly for CB7.
 	if !comic.Encrypted {
-		comic.Encrypted = isCB7Encrypted(comic.FilePath)
+		switch comic.FileType {
+		case ".cb7":
+			comic.Encrypted = isCB7Encrypted(comic.FilePath)
+		case ".epub":
+			comic.Encrypted = isEPUBEncrypted(comic.FilePath)
+		}
 		if comic.Encrypted {
 			// Update in-memory and DB
 			comicsMutex.Lock()
@@ -1787,14 +1863,18 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Use the validation function
-	if !validatePassword(comic.FilePath, req.Password) {
+	// Use the validation function. workingPassword is what actually
+	// decrypted the file — for .cbt this can differ from req.Password
+	// (see passwordVariants) — and it's what MUST be persisted, since
+	// every later page-open reuses the stored password verbatim.
+	ok, workingPassword := validatePasswordVariant(comic.FilePath, req.Password)
+	if !ok {
 		http.Error(w, "Invalid password", http.StatusBadRequest)
 		return
 	}
 
 	// Password is valid — apply it, extract metadata, persist.
-	c := applyPasswordToComic(decodedID, req.Password)
+	c := applyPasswordToComic(decodedID, workingPassword)
 
 	// Rebuild tag counts so the new artist tag is immediately visible
 	// in /api/tags without requiring a logout/login cycle.
@@ -1808,20 +1888,32 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func validatePassword(filePath string, password string) bool {
+	ok, _ := validatePasswordVariant(filePath, password)
+	return ok
+}
+
+// validatePasswordVariant is validatePassword plus the exact password
+// string that validated successfully. For every format except .cbt
+// this is always the input unchanged; see validateCBTPasswordVariant.
+func validatePasswordVariant(filePath string, password string) (bool, string) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 
 	if ext == ".cbt" {
-		return validateCBTPassword(filePath, password)
+		return validateCBTPasswordVariant(filePath, password)
 	}
 
 	if ext == ".cb7" {
-		return validateCB7Password(filePath, password)
+		return validateCB7Password(filePath, password), password
+	}
+
+	if ext == ".epub" {
+		return validateEPUBPassword(filePath, password), password
 	}
 
 	if ext == ".cbz" {
 		yr, err := yzip.OpenReader(filePath)
 		if err != nil {
-			return false
+			return false, ""
 		}
 		defer yr.Close()
 
@@ -1829,13 +1921,13 @@ func validatePassword(filePath string, password string) bool {
 		for _, f := range yr.File {
 			if strings.ToLower(f.Name) == "comicinfo.xml" {
 				if !f.IsEncrypted() {
-					return true
+					return true, password
 				}
 
 				f.SetPassword(password)
 				rc, err := f.Open()
 				if err != nil {
-					return false
+					return false, ""
 				}
 
 				buf := make([]byte, 100)
@@ -1843,13 +1935,13 @@ func validatePassword(filePath string, password string) bool {
 				rc.Close()
 
 				if err != nil && err != io.EOF {
-					return false
+					return false, ""
 				}
 
 				if n > 0 && strings.Contains(string(buf[:n]), "<?xml") {
-					return true
+					return true, password
 				}
-				return false
+				return false, ""
 			}
 		}
 
@@ -1869,23 +1961,26 @@ func validatePassword(filePath string, password string) bool {
 			}
 
 			if !f.IsEncrypted() {
-				return true
+				return true, password
 			}
 
 			f.SetPassword(password)
 			rc, err := f.Open()
 			if err != nil {
-				return false
+				return false, ""
 			}
 
 			_, _, err = image.DecodeConfig(rc)
 			rc.Close()
 
-			return err == nil
+			if err == nil {
+				return true, password
+			}
+			return false, ""
 		}
 	}
 
-	return false
+	return false, ""
 }
 
 // applyPasswordToComic sets the password on a comic, extracts its metadata,
@@ -2114,6 +2209,9 @@ func serveComicPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum
 	case ".cb7":
 		serveCB7Page(w, r, comic, pageNum)
 		return
+	case ".epub":
+		serveEPUBPage(w, r, comic, pageNum)
+		return
 	case ".cbz":
 		// handled below
 	default:
@@ -2259,6 +2357,15 @@ func handleComicPages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count, "pages": []string{}})
 		return
+	case ".epub":
+		count, err := getEPUBPageCount(comic)
+		if err != nil {
+			http.Error(w, "Error reading comic", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count, "pages": []string{}})
+		return
 	case ".cbz":
 		// handled below
 	default:
@@ -2329,6 +2436,13 @@ func processComic(filePath, filename string, modTime time.Time) Comic {
 		if !comic.Encrypted {
 			extractCB7Metadata(&comic)
 		}
+	} else if comic.FileType == ".epub" {
+		comic.Encrypted = isEPUBEncrypted(comic.FilePath)
+
+		// Extract metadata for unencrypted EPUB files
+		if !comic.Encrypted {
+			extractEPUBMetadata(&comic)
+		}
 	}
 
 	// Extract artist from directory structure as fallback
@@ -2359,7 +2473,6 @@ func processComic(filePath, filename string, modTime time.Time) Comic {
 
 	return comic
 }
-
 
 func loadComicMetadataLazy(comicID string) error {
 	comicsMutex.Lock()
@@ -2461,6 +2574,8 @@ func extractMetadata(comic *Comic) {
 		extractCBTMetadata(comic)
 	} else if comic.FileType == ".cb7" {
 		extractCB7Metadata(comic)
+	} else if comic.FileType == ".epub" {
+		extractEPUBMetadata(comic)
 	}
 }
 
@@ -2557,7 +2672,7 @@ func scanLibrary() {
 		}
 
 		ext := strings.ToLower(filepath.Ext(path))
-		if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" {
+		if ext != ".cbz" && ext != ".cbt" && ext != ".cb7" && ext != ".epub" {
 			return nil
 		}
 
@@ -2589,6 +2704,10 @@ func scanLibrary() {
 			case ".cb7":
 				if !isCB7Encrypted(path) {
 					extractCB7Metadata(&c)
+				}
+			case ".epub":
+				if !isEPUBEncrypted(path) {
+					extractEPUBMetadata(&c)
 				}
 			case ".cbz":
 				if enc := func() bool {
@@ -2641,7 +2760,6 @@ func scanLibrary() {
 	debug.FreeOSMemory()
 }
 
-
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("session")
@@ -2662,6 +2780,7 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r)
 	}
 }
+
 // bbolt helpers
 
 // userBucket returns the per-user bucket name for a given data type.
@@ -2786,6 +2905,13 @@ func loadComics() {
 					c.Encrypted = isCB7Encrypted(c.FilePath)
 					if c.Encrypted {
 						log.Printf("[loadComics] re-detected CB7 %q as encrypted", c.Filename)
+						modified = true
+					}
+				}
+				if c.FileType == ".epub" && !c.Encrypted && !c.HasPassword {
+					c.Encrypted = isEPUBEncrypted(c.FilePath)
+					if c.Encrypted {
+						log.Printf("[loadComics] re-detected EPUB %q as encrypted", c.Filename)
 						modified = true
 					}
 				}
@@ -3171,7 +3297,7 @@ func handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		passwordsMutex.RLock()
 		comicPassword = comicPasswords[comic.ID]
 		passwordsMutex.RUnlock()
-		}
+	}
 
 	sl := ShareLink{
 		ID:             generateToken(),
@@ -3327,16 +3453,16 @@ func handleListShares(w http.ResponseWriter, r *http.Request) {
 
 	// Build a safe response that never exposes the bcrypt hash or encrypted comic password
 	type SafeShareLink struct {
-		ID             string     `json:"id"`
-		ComicID        string     `json:"comic_id"`
-		Username       string     `json:"username"`
-		CreatedAt      time.Time  `json:"created_at"`
-		ExpiresAt      *time.Time `json:"expires_at,omitempty"`
-		Permanent      bool       `json:"permanent"`
-		ComicEncrypted bool       `json:"comic_encrypted"`
-		HasSharePassword bool     `json:"has_share_password"`
-		ComicTitle     string     `json:"comic_title"`
-		ComicFilename  string     `json:"comic_filename"`
+		ID               string     `json:"id"`
+		ComicID          string     `json:"comic_id"`
+		Username         string     `json:"username"`
+		CreatedAt        time.Time  `json:"created_at"`
+		ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+		Permanent        bool       `json:"permanent"`
+		ComicEncrypted   bool       `json:"comic_encrypted"`
+		HasSharePassword bool       `json:"has_share_password"`
+		ComicTitle       string     `json:"comic_title"`
+		ComicFilename    string     `json:"comic_filename"`
 	}
 	safe := make([]SafeShareLink, 0, len(links))
 	for _, sl := range links {
@@ -3435,13 +3561,13 @@ func handleSharedComic(w http.ResponseWriter, r *http.Request) {
 
 	// Build a lightweight Comic struct from the share link's snapshotted data.
 	comic := Comic{
-		ID:        sl.ComicID,
-		FilePath:  sl.ComicFilePath,
-		FileType:  sl.ComicFileType,
-		Title:     sl.ComicTitle,
-		Filename:  sl.ComicFilename,
-		Password:  comicPassword,
-		Encrypted: sl.ComicEncrypted,
+		ID:          sl.ComicID,
+		FilePath:    sl.ComicFilePath,
+		FileType:    sl.ComicFileType,
+		Title:       sl.ComicTitle,
+		Filename:    sl.ComicFilename,
+		Password:    comicPassword,
+		Encrypted:   sl.ComicEncrypted,
 		HasPassword: comicPassword != "",
 	}
 
@@ -3464,6 +3590,8 @@ func handleSharedComic(w http.ResponseWriter, r *http.Request) {
 				genErr = generateCoverCacheLazy(&comic, tmpCache)
 			case ".cb7":
 				genErr = generateCB7Cover(&comic, tmpCache)
+			case ".epub":
+				genErr = generateEPUBCover(&comic, tmpCache)
 			}
 			if genErr == nil {
 				http.ServeFile(w, r, tmpCache)
@@ -3492,6 +3620,10 @@ func serveSharedPages(w http.ResponseWriter, comic Comic) {
 		count, _ := getCB7PageCount(comic)
 		json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count})
 		return
+	case ".epub":
+		count, _ := getEPUBPageCount(comic)
+		json.NewEncoder(w).Encode(map[string]interface{}{"page_count": count})
+		return
 	}
 	// CBZ — use the page index cache
 	names, err := getComicPageIndex(&comic)
@@ -3509,7 +3641,7 @@ func serveSharedPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNu
 	}
 
 	// For non-CBZ formats, inject password and delegate to format handler
-	if comic.FileType == ".cbt" || comic.FileType == ".cb7" {
+	if comic.FileType == ".cbt" || comic.FileType == ".cb7" || comic.FileType == ".epub" {
 		if comic.HasPassword {
 			passwordsMutex.Lock()
 			prev, had := comicPasswords[comic.ID]
@@ -3530,6 +3662,8 @@ func serveSharedPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNu
 			serveCBTPage(w, r, comic, pageNum)
 		case ".cb7":
 			serveCB7Page(w, r, comic, pageNum)
+		case ".epub":
+			serveEPUBPage(w, r, comic, pageNum)
 		}
 		return
 	}
@@ -4011,6 +4145,8 @@ func handleCategorycover(w http.ResponseWriter, r *http.Request) {
 				generateCBTCover(&comic, coverCache)
 			case ".cb7":
 				generateCB7Cover(&comic, coverCache)
+			case ".epub":
+				generateEPUBCover(&comic, coverCache)
 			}
 		}
 		if f, err := os.Open(coverCache); err == nil {

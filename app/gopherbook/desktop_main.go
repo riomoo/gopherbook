@@ -10,17 +10,14 @@ import (
 	"os"
 	"runtime"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
-)
-
-var (
-	desktopApp fyne.App
-	desktopWin fyne.Window
+	"gioui.org/app"
+	"gioui.org/font/gofont"
+	"gioui.org/io/event"
+	"gioui.org/op"
+	"gioui.org/text"
+	"gioui.org/unit"
+	"gioui.org/widget/material"
+	"gioui.org/x/explorer"
 )
 
 func main() {
@@ -44,91 +41,109 @@ func main() {
 	setupRoutes()
 	startBackgroundTasks()
 
-	// ── Embedded HTTP server on random port ──────────────────────────────────
+	// ── Embedded HTTP server on a random local port ──────────────────────────
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Fatalf("Cannot bind embedded server: %v", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	log.Printf("Embedded server on %s", baseURL)
+	globalBaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+	log.Printf("Embedded server on %s", globalBaseURL)
 
-	serverReady := make(chan string, 1)
 	go func() {
-		serverReady <- baseURL
 		if serveErr := http.Serve(ln, nil); serveErr != nil {
 			log.Printf("HTTP server stopped: %v", serveErr)
 		}
 	}()
 
-	// ── Fyne application ─────────────────────────────────────────────────────
-	url := <-serverReady
-
-	desktopApp = app.NewWithID("com.gopherbook.desktop")
-	desktopApp.Settings().SetTheme(NewGopherbookTheme())
-	desktopApp.SetIcon(loadAppIcon())
-
-	desktopWin = desktopApp.NewWindow("Gopherbook")
-	desktopWin.Resize(fyne.NewSize(1280, 820))
-	desktopWin.SetMaster()
-
-	desktopWin.SetContent(buildDesktopUI(url))
-	desktopWin.SetOnClosed(func() { ln.Close() })
-	desktopWin.ShowAndRun()
+	// ── Gio application ──────────────────────────────────────────────────────
+	go func() {
+		w := new(app.Window)
+		w.Option(app.Title("Gopherbook"), app.Size(unit.Dp(1280), unit.Dp(820)))
+		if err := runUI(w, ln); err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}()
+	app.Main()
 }
 
-// buildDesktopUI constructs the full Fyne window layout.
-func buildDesktopUI(baseURL string) fyne.CanvasObject {
-	wv := NewWebViewWidget(baseURL, baseURL+"/")
+// runUI is the whole Gio event loop.
+//
+// Gio is immediate-mode: there is no persistent widget tree between
+// frames, only the *App struct (desktop_gui.go), which every widget
+// reads fresh each frame. Critically, Gio's widgets (Editor,
+// Clickable, Bool, ...) are NOT safe to touch from any goroutine other
+// than the one running this loop. So background work (every HTTP call)
+// never mutates App directly — it sends a func() on uiQueue, and only
+// this loop ever executes those funcs, exactly the role QueueCommand
+// played in the go-gui port. w.Event() blocks, so it runs in its own
+// goroutine feeding an `events` channel, mirroring the pattern Gio's
+// own maintained examples (gophers, explorer) use for the same reason.
+func runUI(w *app.Window, ln net.Listener) error {
+	th := material.NewTheme()
+	th.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
+	applyGopherbookPalette(th)
 
-	logoImg := loadLogoImage()
-	var headerRight fyne.CanvasObject
-	if logoImg != nil {
-		headerRight = logoImg
-	} else {
-		lbl := widget.NewLabel("Gopherbook")
-		lbl.TextStyle = fyne.TextStyle{Bold: true}
-		headerRight = lbl
+	expl := explorer.NewExplorer(w)
+
+	a := &App{
+		win:         w,
+		theme:       th,
+		explorer:    expl,
+		uiQueue:     make(chan func(), 16),
+		baseURL:     globalBaseURL,
+		mode:        modeLogin,
+		loginTab:    true,
+		filterAlpha: "all",
+		filterTags:  make(map[string]bool),
+		fitMode:     "height",
+		zoomFactor:  1.0,
+		pageSize:    40,
 	}
+	globalApp = a
 
-	reloadBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() { wv.Reload() })
-	homeBtn := widget.NewButton("⌂ Library", func() { wv.LoadURL(baseURL + "/") })
-	homeBtn.Importance = widget.HighImportance
+	events := make(chan event.Event)
+	acks := make(chan struct{})
+	go func() {
+		for {
+			e := w.Event()
+			events <- e
+			<-acks
+			if _, ok := e.(app.DestroyEvent); ok {
+				return
+			}
+		}
+	}()
 
-	navLeft := container.NewHBox(reloadBtn, homeBtn)
-	header := container.NewBorder(nil, nil, navLeft, headerRight, widget.NewLabel(""))
-
-	statusLbl := widget.NewLabel(baseURL)
-	statusLbl.TextStyle = fyne.TextStyle{Italic: true}
-	status := container.NewPadded(statusLbl)
-
-	return container.NewBorder(
-		container.NewVBox(header, widget.NewSeparator()),
-		container.NewVBox(widget.NewSeparator(), status),
-		nil, nil,
-		wv,
-	)
+	var ops op.Ops
+	for {
+		select {
+		case fn := <-a.uiQueue:
+			fn()
+			w.Invalidate()
+		case e := <-events:
+			a.explorer.ListenEvents(e)
+			switch e := e.(type) {
+			case app.DestroyEvent:
+				ln.Close()
+				acks <- struct{}{}
+				return e.Err
+			case app.FrameEvent:
+				gtx := app.NewContext(&ops, e)
+				a.layout(gtx)
+				e.Frame(gtx.Ops)
+			}
+			acks <- struct{}{}
+		}
+	}
 }
 
-// loadAppIcon reads the embedded favicon.
-func loadAppIcon() fyne.Resource {
-	data, err := staticFS.ReadFile("static/images/favicon/faviconbig.ico")
-	if err != nil {
-		log.Printf("Could not load app icon: %v", err)
-		return nil
-	}
-	return fyne.NewStaticResource("gopherbook.ico", data)
-}
-
-// loadLogoImage reads the embedded logo as a Fyne canvas image.
-func loadLogoImage() *canvas.Image {
-	data, err := staticFS.ReadFile("static/images/pngs/LogoPose2.png")
-	if err != nil {
-		return nil
-	}
-	res := fyne.NewStaticResource("logo.png", data)
-	img := canvas.NewImageFromResource(res)
-	img.FillMode = canvas.ImageFillContain
-	img.SetMinSize(fyne.NewSize(32, 32))
-	return img
+// applyGopherbookPalette recolors the stock Gio theme with the
+// original site/Fyne palette (teal accent on a dark background).
+func applyGopherbookPalette(th *material.Theme) {
+	th.Palette.Bg = rgb(0x1b1e2c)
+	th.Palette.Fg = rgb(0xe6e3de)
+	th.Palette.ContrastBg = rgb(0x395e62)
+	th.Palette.ContrastFg = rgb(0xe6e3de)
 }
