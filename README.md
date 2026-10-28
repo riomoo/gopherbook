@@ -13,6 +13,8 @@ It is designed for people who want full control over their digital comic collect
 
 Available as a **server** (browser-based) and a **desktop** (native window, no browser required) version.
 
+Pages can be JPEG, PNG, WebP, BMP, **JPEG XL** or **JPEG 2000**, and animated **GIF**, **APNG** and **JPEG XL** pages play in both the web reader and the desktop app.
+
 </div>
 
 ## License
@@ -23,7 +25,7 @@ Available as a **server** (browser-based) and a **desktop** (native window, no b
 
 | Version | Description | Runs on |
 |---------|-------------|---------|
-| **Server** | Browser-based, self-hosted, multi-user | Any Linux, Windows |
+| **Server** | Browser-based, self-hosted, multi-user; pure Go, single static binary | Any Linux, Windows |
 | **Desktop (glibc)** | Native desktop window, no browser needed | Ubuntu, Debian, Fedora, Arch, Void glibc, any glibc 2.28+ distro |
 | **Desktop (musl)** | Native desktop window, no browser needed | Alpine, Void musl, any musl-based distro |
 | **Desktop (Windows)** | Native desktop window, no browser needed | Windows 10+ 64-bit |
@@ -45,6 +47,11 @@ Available as a **server** (browser-based) and a **desktop** (native window, no b
 
 ### Server & Desktop
 - Upload & read `.cbz` (ZIP-based), `.cbt` (TAR-based), `.cb7` (7-Zip-based), or `.epub` (EPUB 3-based) comics
+- **Modern page formats**: pages can be JPEG, PNG, WebP, BMP, **JPEG XL** (`.jxl`) or **JPEG 2000** (`.jp2`, `.j2k`, `.jpf`, `.jpx`); see [Page image formats](#page-image-formats)
+  - **JPEG XL**: lossy, lossless, losslessly recompressed JPEGs, high bit depth, alpha and animation (pure Go, via [gen2brain/jxl](https://github.com/gen2brain/jxl))
+  - **JPEG 2000**: lossless and lossy, tiled, layered, every progression order, greyscale, 16-bit and alpha (pure Go, via [seehuhn.de/go/jpx](https://github.com/seehuhn/go-jpx); matches the OpenJPEG reference decoder)
+  - Browsers that can't display JPEG XL or JPEG 2000 are sent a pixel-exact PNG made on the fly; browsers that can are sent the original file
+- **Animated pages**: animated GIF, APNG (animated PNG) and animated JPEG XL pages play with their original frame timing and loop count, in the web reader and the desktop app
 - **CB7 / 7-Zip support**: full read support for 7-Zip archives, both unencrypted and AES-256 encrypted (including header-encrypted `-mhe=on` archives)
   - LZMA (v1) and LZMA2 decompression supported
   - CRC32 verification used for reliable password validation (works even with store-only/uncompressed archives where wrong passwords produce silent garbage)
@@ -69,9 +76,11 @@ Available as a **server** (browser-based) and a **desktop** (native window, no b
 - Paginated library browsing for large collections
 - **Single unified bbolt database**: replaces scattered JSON files for better performance and reliability
 - **Easy comic deletion**: remove comics from your library with a right-click or trash icon
+- **Changes are never lost**: deletions are saved immediately, and logging out, closing the desktop app or stopping the server (Ctrl-C, `podman stop`) saves any pending edits first. Library entries whose file has gone missing are cleaned up automatically at login
+- **Uploads never overwrite**: uploading a comic whose filename already exists stores it as `name_1.cbz`, `name_2.cbz`, … (just like the watch folder)
 - **Shareable links**: generate and share direct links to individual comics, with optional share-level password protection
 - **Collections**: organize comics into custom collections with generated or uploaded covers
-- No external dependencies: everything self-contained in a single binary
+- No external dependencies: everything self-contained in a single binary. The server (and both Windows builds) is pure Go, built with `CGO_ENABLED=0`, so it needs no C toolchain or system libraries
 
 ### Server only
 - Full-screen web reader with:
@@ -86,23 +95,37 @@ Available as a **server** (browser-based) and a **desktop** (native window, no b
   - Admin can delete any comic
 
 ### Desktop only
-- Native window — no browser required, launches directly as a desktop app
+- Native window — no browser required, launches directly as a desktop app (built with [Gio](https://gioui.org); Wayland or X11 on Linux, and Windows)
+- Plays animated GIF, APNG and JPEG XL pages natively
+- Keyboard controls, Vim-style or arrows:
+
+  | Keys | Action |
+  |------|--------|
+  | `H` `J` `K` `L` / `←` `↓` `↑` `→` | Pan around the page |
+  | `Shift`+`H` / `Shift`+`←` | Previous page |
+  | `Shift`+`L` / `Shift`+`→` | Next page |
+  | `+` / `-` (or `Shift`+`K` / `Shift`+`J`) | Zoom in / out |
+  | `=` | Reset zoom to 100% |
+
 - Available as an AppImage for easy distribution on Linux
 
 ## Installation / Running
 
 ### Prerequisites
 [![Go](https://img.shields.io/badge/go-%2300ADD8.svg?style=for-the-badge&logo=go&logoColor=white)](https://golang.org/dl/)
-- Go 1.26.0+ (only needed to build from source)
+- Go 1.27.2+ (only needed to build from source)
+- Desktop on Linux only: a C compiler and the development packages for libx11, libxcursor, libxfixes, libxkbcommon, Mesa (EGL), Wayland and the Vulkan headers
 - Or download a pre-built binary or AppImage from Releases
 
 ### Quick start: Server (from source)
 ```bash
 git clone https://codeberg.org/riomoo/gopherbook.git
 cd gopherbook
-go build -o gopherbook ./app/gopherbook
+CGO_ENABLED=0 go build -o gopherbook ./app/gopherbook
 ./gopherbook
 ```
+
+`CGO_ENABLED=0` gives a fully static binary; the server has no C code.
 
 Then open http://localhost:8080 in your browser and upload CBZ, CBT, CB7, or EPUB files.
 
@@ -113,6 +136,33 @@ cd gopherbook
 go build -tags desktop -o gopherbook-desktop ./app/gopherbook
 ./gopherbook-desktop
 ```
+
+### Quick start: GNU Guix
+
+Gopherbook is packaged in the [PIL Guix channel](https://git.jester-designs.com/riomoo/guix-channel). Add it to `~/.config/guix/channels.scm`:
+
+```scheme
+(cons* (channel
+         (name 'pil-channel)
+         (url "https://git.jester-designs.com/riomoo/guix-channel")
+         (branch "main")
+         (introduction
+          (make-channel-introduction
+           "13b62f3f4b945786454d1b8f4091100c3140c8cc"
+           (openpgp-fingerprint
+            "5A13 43DB 4CBA 9A07 FC1F  FC02 554A F2CE AE26 AC80"))))
+       %default-channels)
+```
+
+Then:
+
+```bash
+guix pull
+guix install gopherbook           # server
+guix install gopherbook-desktop   # desktop app
+```
+
+The channel also provides a Guix Home service (`home-gopherbook-service-type`) that runs the server for your user.
 
 ### Quick start: Pre-built binaries
 
@@ -135,6 +185,8 @@ Download the appropriate release from the Releases page:
 podman build -f Containerfile.build -t gopherbook-builder .
 
 # Extract all 5 binaries
+# (server Linux/Windows and desktop Windows are pure Go; only the two Linux
+#  desktop builds use cgo, for Gio's X11/Wayland/EGL bindings)
 mkdir -p binaries
 podman run --rm -v ./binaries:/out gopherbook-builder \
   sh -c "cp bin/* /out/"
@@ -142,8 +194,15 @@ podman run --rm -v ./binaries:/out gopherbook-builder \
 
 Then package for release:
 ```bash
-./package-release.sh v3.0.0
+./scripts-bash/building-only/package-release.sh vX.Y.Z
 ```
+
+The Containerfiles pin exact Alpine package versions. Alpine only keeps the newest build of each package, so when a build fails with `unable to select packages`, refresh the pins:
+```bash
+./scripts-bash/building-only/check-apk-pins.sh                 # Containerfile.build
+./scripts-bash/building-only/check-apk-pins.sh Containerfile   # server image
+```
+It reads the `apk add` list from the Containerfile, checks it against the pinned base image, flags base-image packages that also need upgrading (e.g. `musl`), and prints a ready-to-paste block.
 
 ## If you want to use this with podman:
 ```bash
@@ -166,7 +225,7 @@ Then open http://localhost:12010 in your browser.
 ### First launch
 1. On first run there are no users → registration is open
 2. Create the first account → this user automatically becomes admin
-3. Log in → start uploading CBZ/CBT/CB7 files
+3. Log in → start uploading CBZ/CBT/CB7/EPUB files
 
 ## Directory layout after first login
 ```
@@ -204,6 +263,25 @@ GBKPORT=8112                                           # Set the port the server
 | CB7    | `.cb7`    | AES-256 (7-Zip) | ✅ | 7-Zip-based; supports LZMA, LZMA2, header encryption |
 | EPUB   | `.epub`   | AES-256-GCM | ✅ OPF metadata | EPUB 3-based; spine-ordered pages; structural files always plaintext |
 
+### Page image formats
+
+| Format | Extensions | Covers | Web reader | Desktop | Animation |
+|--------|------------|--------|------------|---------|-----------|
+| JPEG | `.jpg` `.jpeg` | ✅ | ✅ | ✅ | — |
+| PNG / APNG | `.png` `.apng` | ✅ | ✅ | ✅ | ✅ APNG |
+| GIF | `.gif` | ✅ | ✅ | ✅ | ✅ |
+| WebP | `.webp` | ✅ | ✅ | ✅ | still images |
+| BMP | `.bmp` | ✅ | ✅ | ✅ | — |
+| JPEG XL | `.jxl` | ✅ | ✅ converted to PNG/APNG unless the browser supports JPEG XL | ✅ | ✅ |
+| JPEG 2000 | `.jp2` `.j2k` `.j2c` `.jpf` `.jpx` | ✅ | ✅ converted to PNG | ✅ | — |
+| AVIF | `.avif` | ❌ | ✅ (the browser decodes it) | ❌ | — |
+
+Format conversions for the web reader happen in memory only; pages from password-protected comics are never written to disk.
+
+**AVIF was replaced by JPEG XL.** Gopherbook no longer bundles an AVIF decoder: it was the only C dependency, and dropping it made the server a pure-Go static binary. AVIF pages are still listed and display in browsers, which decode AVIF themselves, but they get no cover and the desktop app can't show them.
+
+**Not supported:** colour management from embedded ICC profiles (JPEG XL and JPEG 2000 pages are treated as sRGB, so CMYK pages show inaccurate colours), animated WebP (shows its first frame).
+
 ## Watch folder for bulk imports
 
 Gopherbook includes an automatic watch folder system that makes bulk importing comics effortless:
@@ -213,12 +291,12 @@ Gopherbook includes an automatic watch folder system that makes bulk importing c
 - **Smart debouncing**: Waits 5 seconds after detecting files to ensure they're fully copied
 - **File validation**: Checks that files aren't still being written before importing
 - **Duplicate handling**: Automatically renames files if they already exist (adds _1, _2, etc.)
-- **Zero configuration**: Just drop CBZ/CBT/CB7 files into your watch folder under your user name and they appear in your library
+- **Zero configuration**: Just drop CBZ/CBT/CB7/EPUB files into your watch folder under your user name and they appear in your library
 
 ### How to use
 
 1. After logging in, your personal watch folder is at `./watch/[yourusername]/`
-2. Copy or move CBZ/CBT/CB7 files into this folder using any method:
+2. Copy or move CBZ/CBT/CB7/EPUB files into this folder using any method:
    - Direct file copy/paste
    - SCP/SFTP upload
    - Network share mount
@@ -333,8 +411,11 @@ Please open an issue first for bigger changes.
 
 - yeka/zip – password-protected ZIP support in pure Go
 - bodgit/sevenzip – 7-Zip archive support in pure Go
-- kulaginds/lzma – LZMA (v1) decompressor for 7-Zip archives
-- fyne.io/fyne – desktop GUI framework for the native desktop version
+- kulaginds/lzma – LZMA (v1) decompressor for 7-Zip archives (LGPL-3.0)
+- gioui.org (Gio) – GUI toolkit for the native desktop version
+- gen2brain/jxl – pure-Go JPEG XL decoder
+- seehuhn.de/go/jpx – pure-Go JPEG 2000 decoder
+- go.etcd.io/bbolt – the embedded database
 - The ComicRack ComicInfo.xml standard
 - The EPUB 3 specification (IDPF / W3C)
 - Everyone who hoards comics ❤️

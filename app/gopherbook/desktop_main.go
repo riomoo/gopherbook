@@ -38,6 +38,7 @@ func main() {
 	// ── Database, users, routes, background tasks ────────────────────────────
 	initCore()
 	defer db.Close()
+	flushOnSignal() // save pending edits if the session ends under us (persist.go)
 	setupRoutes()
 	startBackgroundTasks()
 
@@ -60,9 +61,14 @@ func main() {
 	go func() {
 		w := new(app.Window)
 		w.Option(app.Title("Gopherbook"), app.Size(unit.Dp(1280), unit.Dp(820)))
-		if err := runUI(w, ln); err != nil {
+		err := runUI(w, ln)
+		// os.Exit skips deferred calls, so save pending edits (e.g. a
+		// comic deleted just before closing the window) explicitly.
+		flushPendingSave()
+		if err != nil {
 			log.Fatal(err)
 		}
+		db.Close()
 		os.Exit(0)
 	}()
 	app.Main()

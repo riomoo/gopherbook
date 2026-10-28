@@ -30,7 +30,6 @@ import (
 	"time"
 
 	"github.com/nfnt/resize"
-	_ "github.com/vegidio/avif-go"
 	yzip "github.com/yeka/zip"
 	bolt "go.etcd.io/bbolt"
 	"golang.org/x/crypto/bcrypt"
@@ -477,6 +476,10 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Save pending edits while currentUser and comics still belong to the
+	// user who's logging out (persist.go).
+	flushPendingSave()
+
 	cookie, err := r.Cookie("session")
 	if err == nil {
 		sessionsMutex.Lock()
@@ -493,6 +496,7 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 	passwordsMutex.Lock()
 	comicPasswords = make(map[string]string)
 	passwordsMutex.Unlock()
+	clearJXLCache() // converted pages may come from password-protected comics
 	categoriesMutex.Lock()
 	categories = make(map[string]Category)
 	categoriesMutex.Unlock()
@@ -588,8 +592,12 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			destPath := filepath.Join(libraryPath, "Unorganized", filename)
-			destFile, err := os.Create(destPath)
+			// Never overwrite: an upload with the name of a comic already in
+			// the library used to replace that file while adding a second
+			// entry for it, and deleting either entry then left the other
+			// pointing at a missing file. Use name_1.cbz, name_2.cbz, ...
+			// like the watch-folder import does.
+			destPath, destFile, err := createUniqueFile(filepath.Join(libraryPath, "Unorganized"), filename)
 			if err != nil {
 				http.Error(w, "Error saving file", http.StatusInternalServerError)
 				return
@@ -604,11 +612,12 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 			}
 
 			fileInfo, _ := os.Stat(destPath)
-			comic := processComic(destPath, filename, fileInfo.ModTime())
+			comic := processComic(destPath, filepath.Base(destPath), fileInfo.ModTime())
 
 			comicsMutex.Lock()
 			comics[comic.ID] = comic
 			comicsMutex.Unlock()
+			debounceSave() // uploads were never saved on their own before
 
 			buf = nil
 			runtime.GC()
@@ -631,21 +640,11 @@ func handleDeleteComic(w http.ResponseWriter, r *http.Request) {
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/admin/delete-comic/")
 	decodedID, _ := url.QueryUnescape(id)
-	comicsMutex.Lock()
-	comic, exists := comics[decodedID]
-	if exists {
-		os.Remove(comic.FilePath)
-		for _, tag := range comic.Tags {
-			updateTagCount(tag, -1)
-		}
-		delete(comics, decodedID)
-		debounceSave()
-		// Evict page index cache
-		pageIndexCacheMutex.Lock()
-		delete(pageIndexCache, decodedID)
-		pageIndexCacheMutex.Unlock()
+	if err := deleteComicByID(decodedID, user.Username); err != nil && err != errComicNotFound {
+		log.Printf("delete comic %s: %v", decodedID, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-	comicsMutex.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Deleted"})
@@ -660,38 +659,15 @@ func handleUserDeleteComic(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/delete-comic/")
 	decodedID, _ := url.QueryUnescape(id)
 
-	comicsMutex.Lock()
-	comic, exists := comics[decodedID]
-	if !exists {
-		comicsMutex.Unlock()
+	switch err := deleteComicByID(decodedID, getCurrentUser(r).Username); {
+	case err == errComicNotFound:
 		http.Error(w, "Comic not found", http.StatusNotFound)
 		return
+	case err != nil:
+		log.Printf("delete comic %s: %v", decodedID, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-	os.Remove(comic.FilePath)
-	// Also remove cached cover
-	cacheFile := filepath.Join(cachePath, comic.ID+".jpg")
-	os.Remove(cacheFile)
-	// Evict page index cache
-	pageIndexCacheMutex.Lock()
-	delete(pageIndexCache, decodedID)
-	pageIndexCacheMutex.Unlock()
-	for _, tag := range comic.Tags {
-		updateTagCount(tag, -1)
-	}
-	delete(comics, decodedID)
-	comicsMutex.Unlock()
-
-	// Remove any share links for this comic
-	shareLinksMutex.Lock()
-	for token, sl := range shareLinks {
-		if sl.ComicID == decodedID {
-			delete(shareLinks, token)
-		}
-	}
-	shareLinksMutex.Unlock()
-	saveShareLinks(getCurrentUser(r).Username)
-
-	debounceSave()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "Deleted"})
@@ -743,12 +719,18 @@ func handleCover(w http.ResponseWriter, r *http.Request) {
 	// Set password if we have it
 	if hasPassword {
 		comicsMutex.Lock()
-		c := comics[comic.ID]
-		c.Password = password
-		c.HasPassword = true
-		comics[comic.ID] = c
-		comic = c
+		c, still := comics[comic.ID]
+		if still { // it may have been deleted since we looked it up
+			c.Password = password
+			c.HasPassword = true
+			comics[comic.ID] = c
+			comic = c
+		}
 		comicsMutex.Unlock()
+		if !still {
+			http.Error(w, "Comic not found", http.StatusNotFound)
+			return
+		}
 	}
 
 	// Load metadata if not already loaded
@@ -1080,9 +1062,7 @@ func generateCBTCover(comic *Comic, cacheFile string) error {
 		}
 
 		ext := strings.ToLower(filepath.Ext(header.Name))
-		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-			ext == ".gif" || ext == ".avif" || ext == ".webp" ||
-			ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
+		if isImageExt(ext) {
 
 			// Found an image, read it
 			imageData, err = io.ReadAll(tr)
@@ -1098,7 +1078,7 @@ func generateCBTCover(comic *Comic, cacheFile string) error {
 	}
 
 	// Decode image
-	img, _, err := image.Decode(bytes.NewReader(imageData))
+	img, _, err := decodeImage(bytes.NewReader(imageData))
 	if err != nil {
 		return err
 	}
@@ -1188,9 +1168,7 @@ func serveCBTPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum s
 		}
 
 		ext := strings.ToLower(filepath.Ext(header.Name))
-		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-			ext == ".gif" || ext == ".avif" || ext == ".webp" ||
-			ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
+		if isImageExt(ext) {
 
 			data, err := io.ReadAll(tr)
 			if err != nil {
@@ -1219,12 +1197,7 @@ func serveCBTPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum s
 	}
 
 	targetFile := imageFiles[pageIdx]
-	ext := strings.ToLower(filepath.Ext(targetFile.Name))
-	contentType := getContentType(ext)
-
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.Write(targetFile.Data)
+	writePage(w, r, targetFile.Name, targetFile.Data, comic.ID+"/"+pageNum)
 }
 
 // Add this function to get CBT page count
@@ -1280,9 +1253,7 @@ func getCBTPageCount(comic Comic) (int, error) {
 		}
 
 		ext := strings.ToLower(filepath.Ext(header.Name))
-		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-			ext == ".gif" || ext == ".avif" || ext == ".webp" ||
-			ext == ".bmp" || ext == ".jp2" || ext == ".jxl" {
+		if isImageExt(ext) {
 			count++
 		}
 	}
@@ -1325,8 +1296,7 @@ func generateCoverCacheLazy(comic *Comic, cacheFile string) error {
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" ||
-			ext == ".avif" || ext == ".jxl" || ext == ".webp" || ext == ".bmp" || ext == ".jp2" {
+		if isImageExt(ext) {
 			imageFiles = append(imageFiles, f)
 		}
 	}
@@ -1441,7 +1411,7 @@ func resizeCoverDirectly(comic *Comic, coverFile *yzip.File, cacheFile string, m
 	if err != nil {
 		return err
 	}
-	img, _, err := image.Decode(tmpF)
+	img, _, err := decodeImage(tmpF)
 	tmpF.Close()
 	if err != nil {
 		return err
@@ -1486,7 +1456,7 @@ func resizeImageAggressively(inputPath, outputPath string, maxDimension int) err
 	}
 	defer f.Close()
 
-	img, _, err := image.Decode(f)
+	img, _, err := decodeImage(f)
 	if err != nil {
 		return err
 	}
@@ -1797,7 +1767,11 @@ func handleTryKnownPasswords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Password worked! Save it, extract metadata, persist.
-	c := applyPasswordToComic(decodedID, validPassword)
+	c, ok := applyPasswordToComic(decodedID, validPassword)
+	if !ok {
+		http.Error(w, "Comic not found", http.StatusNotFound)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1852,9 +1826,10 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		if comic.Encrypted {
 			// Update in-memory and DB
 			comicsMutex.Lock()
-			c := comics[decodedID]
-			c.Encrypted = true
-			comics[decodedID] = c
+			if c, ok := comics[decodedID]; ok { // not deleted meanwhile
+				c.Encrypted = true
+				comics[decodedID] = c
+			}
 			comicsMutex.Unlock()
 			debounceSave()
 		} else {
@@ -1874,7 +1849,11 @@ func handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Password is valid — apply it, extract metadata, persist.
-	c := applyPasswordToComic(decodedID, workingPassword)
+	c, ok := applyPasswordToComic(decodedID, workingPassword)
+	if !ok {
+		http.Error(w, "Comic not found", http.StatusNotFound)
+		return
+	}
 
 	// Rebuild tag counts so the new artist tag is immediately visible
 	// in /api/tags without requiring a logout/login cycle.
@@ -1952,9 +1931,7 @@ func validatePasswordVariant(filePath string, password string) (bool, string) {
 			}
 
 			ext := strings.ToLower(filepath.Ext(f.Name))
-			isImage := ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-				ext == ".gif" || ext == ".avif" || ext == ".jxl" ||
-				ext == ".webp" || ext == ".bmp" || ext == ".jp2"
+			isImage := isImageExt(ext)
 
 			if !isImage {
 				continue
@@ -1986,9 +1963,13 @@ func validatePasswordVariant(filePath string, password string) (bool, string) {
 // applyPasswordToComic sets the password on a comic, extracts its metadata,
 // auto-organizes the file, and persists everything. Returns the updated Comic.
 // Used by both handleTryKnownPasswords and handleSetPassword.
-func applyPasswordToComic(id, password string) Comic {
+func applyPasswordToComic(id, password string) (Comic, bool) {
 	comicsMutex.Lock()
-	c := comics[id]
+	c, exists := comics[id]
+	if !exists { // deleted while its password was being checked
+		comicsMutex.Unlock()
+		return Comic{}, false
+	}
 	c.Password = password
 	c.HasPassword = true
 	extractMetadata(&c)
@@ -2035,7 +2016,7 @@ func applyPasswordToComic(id, password string) Comic {
 	saveTags()
 	saveComics()
 	savePasswords()
-	return c
+	return c, true
 }
 
 func handleBookmark(w http.ResponseWriter, r *http.Request) {
@@ -2187,8 +2168,7 @@ func getComicPageIndex(comic *Comic) ([]string, error) {
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".avif" ||
-			ext == ".jxl" || ext == ".jp2" || ext == ".webp" || ext == ".gif" || ext == ".bmp" {
+		if isImageExt(ext) {
 			names = append(names, f.Name)
 		}
 	}
@@ -2283,6 +2263,20 @@ func serveComicPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum
 	defer rc.Close()
 
 	ext := strings.ToLower(filepath.Ext(targetFile.Name))
+
+	// JPEG XL / JPEG 2000 pages may need converting for the browser
+	// (jxl_support.go), which needs the whole file; everything else keeps
+	// streaming.
+	if pageNeedsConversion(ext) {
+		data, err := io.ReadAll(io.LimitReader(rc, 256<<20))
+		if err != nil {
+			http.Error(w, "Error reading page", http.StatusInternalServerError)
+			return
+		}
+		writePage(w, r, targetFile.Name, data, comic.ID+"/"+pageNum)
+		return
+	}
+
 	contentType := getContentType(ext)
 
 	w.Header().Set("Content-Type", contentType)
@@ -2928,6 +2922,11 @@ func loadComics() {
 		return nil
 	})
 
+	if n := pruneMissingComics(); n > 0 {
+		log.Printf("[loadComics] removed %d entries whose files no longer exist", n)
+		modified = true
+	}
+
 	// Save synchronously outside the mutex so saveComics can acquire RLock.
 	if modified {
 		saveComics()
@@ -3117,17 +3116,6 @@ func saveShareLinks(username string) {
 }
 
 // Debounced save for comics and tags
-func debounceSave() {
-	if saveTimer != nil {
-		saveTimer.Stop()
-	}
-	saveTimer = time.AfterFunc(5*time.Second, func() {
-		saveComics()
-		saveTags()
-		savePasswords() // Also save passwords if needed
-	})
-}
-
 func updateTagCount(tagName string, delta int) {
 	tagsMutex.Lock()
 	defer tagsMutex.Unlock()
@@ -3161,6 +3149,8 @@ func getContentType(ext string) string {
 	switch ext {
 	case ".png":
 		return "image/png"
+	case ".apng":
+		return "image/apng"
 	case ".webp":
 		return "image/webp"
 	case ".avif":
@@ -3686,8 +3676,7 @@ func serveSharedPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNu
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".avif" ||
-			ext == ".jxl" || ext == ".jp2" || ext == ".webp" || ext == ".gif" || ext == ".bmp" {
+		if isImageExt(ext) {
 			imageFiles = append(imageFiles, f)
 		}
 	}

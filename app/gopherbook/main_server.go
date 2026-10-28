@@ -25,6 +25,7 @@ func main() {
 
 	initCore()
 	defer db.Close()
+	flushOnSignal() // save pending edits on Ctrl-C / podman stop (persist.go)
 	setupRoutes()
 	startBackgroundTasks()
 

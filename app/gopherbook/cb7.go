@@ -11,7 +11,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"image"
 	"image/jpeg"
 	"io"
 	"log"
@@ -44,9 +43,16 @@ func init() {
 // Helpers shared by both formats
 // ─────────────────────────────────────────────────────────────────────────────
 
+// isImageExt reports whether a lower-cased file extension is a comic page
+// image. AVIF pages are still listed: browsers display them natively, but
+// the server and desktop app can't decode them (no AVIF decoder since
+// avif-go was dropped), so they get no cover and show as unsupported in the
+// desktop reader.
 func isImageExt(ext string) bool {
 	switch ext {
-	case ".png", ".jpg", ".jpeg", ".gif", ".avif", ".webp", ".bmp", ".jp2", ".jxl":
+	case ".png", ".apng", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif",
+		".jxl",                                 // JPEG XL (jxl_support.go)
+		".jp2", ".j2k", ".j2c", ".jpf", ".jpx": // JPEG 2000 (jp2_support.go)
 		return true
 	}
 	return false
@@ -273,7 +279,7 @@ func generateCB7Cover(comic *Comic, cacheFile string) error {
 		return fmt.Errorf("extractCB7Page: %w", err)
 	}
 
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, _, err := decodeImage(bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -319,10 +325,7 @@ func serveCB7Page(w http.ResponseWriter, r *http.Request, comic Comic, pageNum s
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(name))
-	w.Header().Set("Content-Type", getContentType(ext))
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.Write(data)
+	writePage(w, r, name, data, comic.ID+"/"+pageNum)
 }
 
 // extractCB7Metadata reads ComicInfo.xml from a CB7 archive.

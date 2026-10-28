@@ -1,11 +1,17 @@
 # Multi-platform build container for Gopherbook — musl/Alpine toolchain
 #
 # Produces:
-#   bin/gopherbook-linux               — server,  Linux,   static musl
-#   bin/gopherbook-windows.exe         — server,  Windows, mingw
+#   bin/gopherbook-linux               — server,  Linux,   pure Go (CGO_ENABLED=0), static
+#   bin/gopherbook-windows.exe         — server,  Windows, pure Go (CGO_ENABLED=0)
 #   bin/gopherbook-desktop-linux-musl  — desktop, Linux,   musl  (Alpine/Void/musl hosts)
 #   bin/gopherbook-desktop-linux-glibc — desktop, Linux,   glibc (Debian/Ubuntu/Fedora/Arch hosts)
-#   bin/gopherbook-desktop-windows.exe — desktop, Windows, mingw
+#   bin/gopherbook-desktop-windows.exe — desktop, Windows, pure Go (CGO_ENABLED=0)
+#
+# Only the Linux desktop builds use cgo: Gio needs C for X11/Wayland/EGL.
+# Everything else is pure Go now that AVIF support (avif-go) is gone. The
+# Windows builds still need mingw-w64-gcc, but only for windres (the .exe
+# icon): windres runs the .rc file through x86_64-w64-mingw32-gcc's C
+# preprocessor, so binutils alone isn't enough.
 #
 # The glibc desktop binary is cross-compiled via zig cc, which ships its own
 # bundled glibc headers — no second builder image required.
@@ -20,42 +26,56 @@ FROM docker.io/library/alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db8
 # vulkan-headers + pkgconf + libxfixes-dev are required by Gio's Linux
 # backend (gioui.org/internal/vk includes <vulkan/vulkan.h>; gioui.org/app
 # uses pkg-config for x11/xcursor/xfixes/xkbcommon/wayland/egl).
+# musl is pinned alongside musl-dev: the base image ships an older musl and
+# `apk add` won't upgrade it on its own.  When a build fails with
+# "unable to select packages", run scripts-bash/building-only/check-apk-pins.sh
+# to get the current versions.
 RUN apk add --no-cache \
+    alpine-release=3.24.3-r0 \
+    apk-tools=3.0.8-r0 \
+    ca-certificates-bundle=20261020-r0 \
     fontconfig-dev=2.17.1-r1 \
     freetype-dev=2.14.3-r0 \
     g++=15.2.0-r5 \
     gcc=15.2.0-r5 \
     git=2.54.0-r0 \
+    libapk=3.0.8-r0 \
     libbsd-static=0.12.2-r0 \
-    libx11=1.8.13-r0 \
-    libx11-dev=1.8.13-r0 \
-    libx11-static=1.8.13-r0 \
+    libcrypto3=3.5.9-r0 \
+    libssl3=3.5.9-r0 \
+    libx11=1.8.14-r0 \
+    libx11-dev=1.8.14-r0 \
+    libx11-static=1.8.14-r0 \
     libxcb=1.17.0-r2 \
     libxcursor-dev=1.2.3-r0 \
     libxext-dev=1.3.7-r0 \
     libxfixes-dev=6.0.2-r0 \
-    libxi-dev=1.8.3-r0 \
+    libxi-dev=1.8.4-r0 \
     libxinerama-dev=1.1.6-r0 \
     libxkbcommon-dev=1.13.1-r0 \
     libxrandr-dev=1.5.5-r0 \
     libxxf86vm-dev=1.1.7-r0 \
     mesa-dev=26.1.6-r0 \
     mingw-w64-gcc=15.2.0-r0 \
-    musl-dev=1.2.6-r2 \
+    musl=1.2.6-r3 \
+    musl-dev=1.2.6-r3 \
+    musl-utils=1.2.6-r3 \
     pkgconf=2.5.1-r0 \
     vulkan-headers=1.4.347-r0 \
     vulkan-loader=1.4.347-r0 \
     wayland-dev=1.25.0-r0 \
     wget=1.25.0-r3 \
-    xz=5.8.4-r0
+    xz=5.8.4-r0 \
+    zlib=1.3.2-r1
 
 # Install UPX — pinned version + SHA256 verification.
 # Note: --best is used intentionally. --ultra-brute is non-deterministic
 # build, defeating reproducibility. --best is fully deterministic.
 ARG UPX_VERSION=v5.1.1
 ARG UPX_SHA256=1ff660454227861e00772f743f66b900072116b9dc24f6ee28b97cce88a7828a
-ARG GO_VERSION=1.27.0
-ARG GO_SHA256=675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685
+# go.mod requires >= 1.27.2 (seehuhn.de/go/jpx).
+ARG GO_VERSION=1.27.3
+ARG GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
 ARG ZIG_VERSION=0.16.0
 ARG ZIG_SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 RUN wget -q https://github.com/upx/upx/releases/download/${UPX_VERSION}/upx-${UPX_VERSION#v}-amd64_linux.tar.xz && \
@@ -90,9 +110,9 @@ COPY . .
 
 # ── Server build — Linux ──────────────────────────────────────────────────────
 RUN echo "Building server Linux binary..." && \
-    CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -a \
-    -ldflags="-s -w -linkmode external -extldflags '-static'" \
+    -ldflags="-s -w" \
     -trimpath -gcflags="-l=4" -asmflags=-trimpath \
     -o bin/gopherbook-linux ./app/gopherbook && \
     upx --best --lzma bin/gopherbook-linux && \
@@ -102,7 +122,7 @@ RUN echo "Building server Linux binary..." && \
 RUN echo "Building server Windows binary..." && \
     echo 'IDI_ICON1 ICON "./app/gopherbook/static/images/favicon/faviconbig.ico"' > gopherbook.rc && \
     x86_64-w64-mingw32-windres gopherbook.rc -o ./app/gopherbook/gopherbook.syso && \
-    CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc go build \
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
     -a \
     -ldflags="-s -w" \
     -trimpath \
@@ -110,7 +130,7 @@ RUN echo "Building server Windows binary..." && \
     upx --best --lzma bin/gopherbook-windows.exe && \
     rm ./app/gopherbook/gopherbook.syso gopherbook.rc
 
-# -- Desktop build - Linux musl (Gio, -tags desktop)
+# ── Desktop build — Linux musl (Gio, -tags desktop) ─────────────────────────
 RUN echo "Building desktop Linux musl binary..." && \
     CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
     -tags desktop \
@@ -121,11 +141,11 @@ RUN echo "Building desktop Linux musl binary..." && \
     upx --best --lzma bin/gopherbook-desktop-linux-musl && \
     chmod +x bin/gopherbook-desktop-linux-musl
 
-# -- Desktop build - Linux glibc (Gio, -tags desktop, zig cc)
+# ── Desktop build — Linux glibc (Gio, -tags desktop, zig cc) ────────────────
 # Targets x86_64-linux-gnu.2.28 (Debian 10+, Ubuntu 18.10+, Fedora 29+,
 # any modern Arch/Void/etc glibc host). The zigcc/zigcxx wrapper scripts
 # bake in the target and -Wno-error so all cgo invocations, including Go's
-# own runtime/cgo - compile cleanly against Alpine's musl headers.
+# own runtime/cgo — compile cleanly against Alpine's musl headers.
 # CGO_CFLAGS uses -isystem (lower priority than zig's own glibc sysroot) so
 # zig's bundled glibc endian.h gets used, but X11/GL/etc subdirs are still found.
 RUN echo "Building desktop Linux glibc binary..." && \
@@ -142,16 +162,12 @@ RUN echo "Building desktop Linux glibc binary..." && \
     upx --best --lzma bin/gopherbook-desktop-linux-glibc && \
     chmod +x bin/gopherbook-desktop-linux-glibc
 
-# -- Desktop build - Windows (Gio, -tags desktop, mingw cross-compile)
-# -H=windowsgui suppresses the console window on Windows.
+# ── Desktop build — Windows (Gio, -tags desktop, pure Go) ───────────────────
+# Gio on Windows needs no C. -H=windowsgui suppresses the console window.
 RUN echo "Building desktop Windows binary..." && \
     echo 'IDI_ICON1 ICON "./app/gopherbook/static/images/favicon/faviconbig.ico"' > gopherbook-desktop.rc && \
     x86_64-w64-mingw32-windres gopherbook-desktop.rc -o ./app/gopherbook/gopherbook.syso && \
-    CGO_ENABLED=1 \
-    GOOS=windows GOARCH=amd64 \
-    CC=x86_64-w64-mingw32-gcc \
-    CXX=x86_64-w64-mingw32-g++ \
-    CGO_CFLAGS="-D_WIN32_WINNT=0x0601" \
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
     go build \
     -tags desktop \
     -a \
@@ -161,7 +177,7 @@ RUN echo "Building desktop Windows binary..." && \
     upx --best --lzma bin/gopherbook-desktop-windows.exe && \
     rm ./app/gopherbook/gopherbook.syso gopherbook-desktop.rc
 
-# -- Verify all five binaries
+# ── Verify all five binaries ──────────────────────────────────────────────────
 RUN ls -lh bin/ && \
     echo "Build complete!" && \
     echo "Server   Linux        : $(du -h bin/gopherbook-linux | cut -f1)" && \

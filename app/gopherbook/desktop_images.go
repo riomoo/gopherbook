@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"image/draw"
@@ -12,8 +11,10 @@ import (
 	_ "image/png"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"sync"
+	"time"
 
 	"gioui.org/gesture"
 	"gioui.org/io/event"
@@ -26,7 +27,6 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
-	"github.com/vegidio/avif-go"
 	_ "golang.org/x/image/bmp"
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
@@ -43,6 +43,57 @@ type remoteImg struct {
 	op      paint.ImageOp
 	w, h    int // native decoded pixel size — needed to compute true fit-width/fit-height render sizes
 	ready   bool
+
+	// Animated images (GIF, APNG, JPEG XL): every frame, with its display
+	// time. op above is frames[0]. start is when playback began.
+	frames []paint.ImageOp
+	delays []time.Duration
+	loops  int // 0 = forever
+	start  time.Time
+}
+
+// maxAnimBytes caps the decoded RGBA held for one animation; frames are
+// scaled down to fit, so a long full-page animation can't exhaust memory.
+const maxAnimBytes = 384 << 20
+
+// animFrame picks the frame to show after elapsed playback time, and how long
+// until the next change. done is true once a finite loop count has run out,
+// in which case the last frame stays up.
+func animFrame(delays []time.Duration, loops int, elapsed time.Duration) (idx int, untilNext time.Duration, done bool) {
+	var total time.Duration
+	for _, d := range delays {
+		total += d
+	}
+	if len(delays) == 0 || total <= 0 {
+		return 0, 0, true
+	}
+	if loops > 0 && elapsed >= total*time.Duration(loops) {
+		return len(delays) - 1, 0, true
+	}
+	t := elapsed % total
+	for i, d := range delays {
+		if t < d {
+			return i, d - t, false
+		}
+		t -= d
+	}
+	return len(delays) - 1, 0, false // unreachable: t < total
+}
+
+// animate schedules a redraw for the next frame change of url, if it's an
+// animation. Call it from any widget that displays imageState(url).
+func (a *App) animate(gtx C, url string) {
+	imgMu.Lock()
+	e := imgCache[url]
+	var wait time.Duration
+	var done bool
+	if e != nil && len(e.frames) > 1 {
+		_, wait, done = animFrame(e.delays, e.loops, gtx.Now.Sub(e.start))
+	}
+	imgMu.Unlock()
+	if e != nil && len(e.frames) > 1 && !done {
+		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(wait)})
+	}
 }
 
 var (
@@ -89,6 +140,10 @@ func (a *App) imageState(url string) (op paint.ImageOp, w, h int, loading bool, 
 	}
 	if e.ready {
 		op, w, h = e.op, e.w, e.h
+		if len(e.frames) > 1 {
+			i, _, _ := animFrame(e.delays, e.loops, time.Since(e.start))
+			op = e.frames[i]
+		}
 	}
 	return op, w, h, e.loading, e.err
 }
@@ -115,6 +170,7 @@ func (a *App) remoteImageFit(gtx C, url string, w, h float32) D {
 		}
 		return layout.Center.Layout(gtx, material.Body2(th, text).Layout)
 	}
+	a.animate(gtx, url)
 	img := widget.Image{Src: op, Fit: widget.Contain}
 	return img.Layout(gtx)
 }
@@ -143,6 +199,10 @@ func loadRemoteImage(a *App, url string, e *remoteImg) {
 	if c := getSessionCookie(); c != "" {
 		req.Header.Set("Cookie", c)
 	}
+	// Ask for JPEG XL and JPEG 2000 pages as-is: we decode them (and any
+	// animation frames) here, rather than getting the browser's PNG/APNG
+	// conversion.
+	req.Header.Set("Accept", "image/jxl,image/jp2,image/*;q=0.8")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		finish(err, paint.ImageOp{}, 0, 0)
@@ -159,37 +219,79 @@ func loadRemoteImage(a *App, url string, e *remoteImg) {
 		return
 	}
 
-	var img image.Image
-	if len(data) > 12 && string(data[4:8]) == "ftyp" &&
-		(string(data[8:12]) == "avif" || string(data[8:12]) == "avis") {
-		img, err = avif.Decode(bytes.NewReader(data))
-	} else {
-		img, _, err = image.Decode(bytes.NewReader(data))
-		if err != nil {
-			err = fmt.Errorf("unsupported image (%v)", err)
+	loadFrames(data, e, finish)
+}
+
+// loadFrames decodes a page, keeping every frame of an animated GIF, APNG
+// or JPEG XL (anim.go). Still images come through as a single frame.
+func loadFrames(data []byte, e *remoteImg, finish func(error, paint.ImageOp, int, int)) {
+	var (
+		frames []paint.ImageOp
+		delays []time.Duration
+		w, h   int
+		extra  = 1.0
+	)
+	loops, err := decodeAnimation(data, func(i, n int, img image.Image, delay float64) error {
+		if i == 0 {
+			frames = make([]paint.ImageOp, 0, n)
+			// Shrink every frame further if the whole animation would
+			// exceed maxAnimBytes.
+			if n > 1 {
+				b := img.Bounds()
+				fw, fh := min(b.Dx(), maxImgW), min(b.Dy(), maxImgH)
+				if total := float64(n) * float64(fw) * float64(fh) * 4; total > maxAnimBytes {
+					extra = math.Sqrt(maxAnimBytes / total)
+				}
+			}
 		}
+		rgba := toDisplayRGBA(img, extra)
+		frames = append(frames, paint.NewImageOp(rgba))
+		w, h = rgba.Rect.Dx(), rgba.Rect.Dy()
+		// Like browsers with GIFs: a zero or tiny delay plays at 100 ms
+		// instead of spinning as fast as possible.
+		if delay < 0.02 {
+			delay = 0.1
+		}
+		delays = append(delays, time.Duration(delay*float64(time.Second)))
+		return nil
+	})
+	if err == nil && len(frames) == 0 {
+		err = fmt.Errorf("no image")
 	}
 	if err != nil {
-		finish(err, paint.ImageOp{}, 0, 0)
+		finish(fmt.Errorf("unsupported image (%v)", err), paint.ImageOp{}, 0, 0)
 		return
 	}
+	if len(frames) > 1 {
+		imgMu.Lock()
+		e.frames, e.delays, e.loops, e.start = frames, delays, loops, time.Now()
+		imgMu.Unlock()
+	}
+	finish(nil, frames[0], w, h)
+}
 
+// toDisplayRGBA converts img to an *image.RGBA (the format Gio uploads
+// without another copy) no larger than maxImgW x maxImgH, additionally
+// scaled by extra (<= 1).
+func toDisplayRGBA(img image.Image, extra float64) *image.RGBA {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
+	s := extra
 	if w > maxImgW || h > maxImgH {
-		s := float64(maxImgW) / float64(w)
-		if t := float64(maxImgH) / float64(h); t < s {
-			s = t
-		}
-		nw, nh := int(float64(w)*s), int(float64(h)*s)
-		dst := image.NewNRGBA(image.Rect(0, 0, nw, nh))
-		xdraw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, b, xdraw.Src, nil)
-		img, b = dst, dst.Bounds()
+		s *= min(float64(maxImgW)/float64(w), float64(maxImgH)/float64(h))
 	}
-	nrgba := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	draw.Draw(nrgba, nrgba.Bounds(), img, b.Min, draw.Src)
-
-	finish(nil, paint.NewImageOp(nrgba), b.Dx(), b.Dy())
+	if s < 1 {
+		nw, nh := max(int(float64(w)*s), 1), max(int(float64(h)*s), 1)
+		dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
+		xdraw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, b, xdraw.Src, nil)
+		return dst
+	}
+	if r, ok := img.(*image.RGBA); ok && r.Rect.Min == (image.Point{}) {
+		return r
+	}
+	rgba := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(rgba, rgba.Bounds(), img, b.Min, draw.Src)
+	return rgba
 }
 
 // readerPageView is the comic-reader's page display: unlike
@@ -343,6 +445,7 @@ func (a *App) readerPageView(gtx C, url string) D {
 			drawY = (viewport.Y - renderSize.Y) / 2
 		}
 
+		a.animate(gtx, url) // animated page: redraw when the next frame is due
 		defer op.Offset(image.Pt(drawX, drawY)).Push(gtx.Ops).Pop()
 		imgGtx := gtx
 		imgGtx.Constraints = layout.Exact(renderSize)

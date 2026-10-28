@@ -26,7 +26,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"image"
 	"image/jpeg"
 	_ "image/png"
 	"io"
@@ -587,7 +586,7 @@ func generateEPUBCover(comic *Comic, cacheFile string) error {
 		return fmt.Errorf("extractEPUBPage: %w", err)
 	}
 
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, _, err := decodeImage(bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("decode cover image: %w", err)
 	}
@@ -628,10 +627,7 @@ func serveEPUBPage(w http.ResponseWriter, r *http.Request, comic Comic, pageNum 
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(name))
-	w.Header().Set("Content-Type", getContentType(ext))
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.Write(data)
+	writePage(w, r, name, data, comic.ID+"/"+pageNum)
 }
 
 // ─── processComic integration ─────────────────────────────────────────────────
